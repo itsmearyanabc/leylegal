@@ -268,8 +268,8 @@ function field(name, label, type, hint) {
 }
 
 function brandMarkup() {
-  return '<div class="brand"><div class="brand-mark">VS</div>' +
-    '<div class="brand-text"><b>Vakeel Saathi</b>' +
+  return '<div class="brand"><div class="brand-mark">LEY</div>' +
+    '<div class="brand-text"><b>Ley Legal</b>' +
     '<span>Legal research for Indian advocates</span></div></div>';
 }
 
@@ -543,7 +543,7 @@ async function enterApp() {
             '<textarea id="composer" rows="1" placeholder="Ask about a section, a judgment, or paste a CNR…"></textarea>' +
             '<button class="send-btn" id="send" aria-label="Send">' + ICON_SEND + '</button>' +
           '</div>' +
-          '<div class="composer-note">Vakeel Saathi assists with research. It is not legal advice, ' +
+          '<div class="composer-note">Ley Legal assists with research. It is not legal advice, ' +
             'and every citation should be verified before it is relied on in court.</div>' +
         '</div></div>' +
       '</main>' +
@@ -1531,7 +1531,7 @@ async function startCheckout(pack, button, feedback, close) {
       order_id: order.gatewayOrderId,
       amount: order.amountPaise,
       currency: order.currency,
-      name: 'Vakeel Saathi',
+      name: 'Ley Legal',
       description: order.credits + ' credits — ' + order.packName,
       prefill: {
         name: state.user.fullName || '',
@@ -1778,8 +1778,8 @@ async function renderWhatsAppTab(panel, live = () => true) {
 
       const steps = el('ol', 'steps');
       const target = link.botNumber
-        ? 'the Vakeel Saathi bot on WhatsApp (' + link.botNumber + ')'
-        : 'the Vakeel Saathi bot on WhatsApp';
+        ? 'the Ley Legal bot on WhatsApp (' + link.botNumber + ')'
+        : 'the Ley Legal bot on WhatsApp';
       steps.appendChild(el('li', null, 'Open WhatsApp on ' + link.phoneNumber + '.'));
       steps.appendChild(el('li', null, 'Send this code to ' + target + '.'));
       steps.appendChild(el('li', null, 'Come back here — the link happens as soon as it arrives.'));

@@ -48,8 +48,8 @@ function shell(title: string, view: LegalView, body: string, css: string): strin
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>${esc(title)} — Vakeel Saathi</title>
-<meta name="description" content="How Vakeel Saathi handles advocates' personal data.">
+<title>${esc(title)} — Ley Legal</title>
+<meta name="description" content="How Ley Legal handles advocates' personal data.">
 <style>${css}
 .legal { max-width: 760px; margin: 0 auto; padding: 56px 22px 96px; }
 .legal h1 { font-size: 34px; letter-spacing: -.03em; margin: 0 0 8px; }
@@ -72,7 +72,7 @@ function shell(title: string, view: LegalView, body: string, css: string): strin
 </head>
 <body>
 <main class="legal">
-  <a class="back" href="/">&larr; Vakeel Saathi</a>
+  <a class="back" href="/">&larr; Ley Legal</a>
   ${body}
 </main>
 </body>
@@ -87,14 +87,14 @@ function shell(title: string, view: LegalView, body: string, css: string): strin
  * nobody finishes reading provides no consent worth relying on.
  */
 export function renderPrivacy(view: LegalView, css: string): string {
-  const operator = view.operator || 'the operator of Vakeel Saathi';
+  const operator = view.operator || 'the operator of Ley Legal';
   const contact = view.contactEmail || 'the contact address published on this site';
 
   const body = `
   <h1>Privacy Policy</h1>
-  <p class="meta">Last updated ${esc(view.updated)} · Applies to ${esc(view.publicUrl)} and the Vakeel Saathi WhatsApp service</p>
+  <p class="meta">Last updated ${esc(view.updated)} · Applies to ${esc(view.publicUrl)} and the Ley Legal WhatsApp service</p>
 
-  <p>Vakeel Saathi is a legal research assistant for advocates practising in India.
+  <p>Ley Legal is a legal research assistant for advocates practising in India.
   This page describes what personal data the service collects, why, who it is shared
   with, and how long it is kept. It is written to match what the software actually
   does.</p>
@@ -219,7 +219,7 @@ export function renderPrivacy(view: LegalView, css: string): string {
   Accounts are not knowingly created for children.</p>
 
   <h2>10. Accuracy of answers</h2>
-  <p>Vakeel Saathi is a research aid, not legal advice, and does not create an
+  <p>Ley Legal is a research aid, not legal advice, and does not create an
   advocate-client relationship. Citations are checked against the database before they
   are shown, but you remain responsible for verifying any authority before relying on
   it in practice.</p>
@@ -228,7 +228,7 @@ export function renderPrivacy(view: LegalView, css: string): string {
   <p>If this policy changes materially, the date at the top changes and you will be
   told through the service before the change takes effect.</p>
 
-  <p class="meta" style="margin-top:48px">&copy; ${view.year} Vakeel Saathi</p>`;
+  <p class="meta" style="margin-top:48px">&copy; ${view.year} Ley Legal</p>`;
 
   return shell('Privacy Policy', view, body, css);
 }

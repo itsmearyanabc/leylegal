@@ -187,9 +187,10 @@ p { margin:0; }
 }
 .site-header .wrap { display:flex; align-items:center; gap:20px; height:60px; }
 
-.brand { display:inline-flex; align-items:baseline; gap:8px; flex:0 0 auto; }
+.brand { display:inline-flex; align-items:center; gap:8px; flex:0 0 auto; text-decoration:none; }
+.brand .logo-mark { display:inline-flex; align-items:center; }
+.brand .logo-mark svg { width:22px; height:22px; }
 .brand .en { font-size:16.5px; font-weight:600; letter-spacing:-.028em; }
-.brand .hi { font-size:14px; font-weight:400; color:var(--faint); letter-spacing:0; }
 
 .site-nav { display:flex; align-items:center; gap:2px; margin-left:14px; }
 .site-nav a {

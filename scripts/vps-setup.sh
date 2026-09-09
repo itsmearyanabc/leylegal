@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# One-shot VPS setup for Vakeel Saathi on a host that runs other applications.
+# One-shot VPS setup for Ley Legal on a host that runs other applications.
 #
 #   bash scripts/vps-setup.sh
 #
@@ -19,10 +19,10 @@
 
 set -euo pipefail
 
-APP_NAME="vakeel"
+APP_NAME="leylegal"
 APP_DIR="${APP_DIR:-$HOME/$APP_NAME}"
-REPO="${REPO:-https://github.com/itsmearyanabc/vakeel.git}"
-DOMAIN="${DOMAIN:-vakeelsaathi.in}"
+REPO="${REPO:-https://github.com/itsmearyanabc/leylegal.git}"
+DOMAIN="${DOMAIN:-leylegal.in}"
 PORT="${PORT:-3001}"
 NODE_MAJOR=22
 
@@ -37,7 +37,7 @@ bold "Recording the state of other applications"
 # Captured now so the end of this script can prove nothing else was disturbed,
 # rather than assuring you of it.
 OTHERS_BEFORE="$(pm2 jlist 2>/dev/null \
-  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{JSON.parse(s).filter(p=>!p.name.startsWith("vakeel")).forEach(p=>console.log(p.name+":"+p.pid))}catch{}})' \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{JSON.parse(s).filter(p=>!p.name.startsWith("leylegal")).forEach(p=>console.log(p.name+":"+p.pid))}catch{}})' \
   2>/dev/null || true)"
 
 if [ -n "$OTHERS_BEFORE" ]; then
@@ -161,7 +161,7 @@ bold "Checking the port is free"
 if ss -ltn "( sport = :$PORT )" 2>/dev/null | grep -q ":$PORT"; then
   # Ours from a previous run is fine; anyone else's is not.
   if pm2 pid "${APP_NAME}-web" >/dev/null 2>&1; then
-    ok "port $PORT held by our own vakeel-web (will be reloaded)"
+    ok "port $PORT held by our own leylegal-web (will be reloaded)"
   else
     die "Port $PORT is already in use by another process.
    Pick a different PORT in .env and re-run."
@@ -176,7 +176,7 @@ bold "Retiring the old single-process app, if present"
 # Scoped by exact name. Nothing here can match a neighbour's process.
 if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
   pm2 delete "$APP_NAME" >/dev/null
-  ok "removed the old '$APP_NAME' process (replaced by vakeel-web + vakeel-worker)"
+  ok "removed the old '$APP_NAME' process (replaced by leylegal-web + leylegal-worker)"
 else
   ok "nothing to retire"
 fi
@@ -191,7 +191,7 @@ NODE_INTERPRETER="$NODE_BIN" ./scripts/deploy.sh
 bold "Confirming nothing else moved"
 # ---------------------------------------------------------------------------
 OTHERS_AFTER="$(pm2 jlist 2>/dev/null \
-  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{JSON.parse(s).filter(p=>!p.name.startsWith("vakeel")).forEach(p=>console.log(p.name+":"+p.pid))}catch{}})' \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{JSON.parse(s).filter(p=>!p.name.startsWith("leylegal")).forEach(p=>console.log(p.name+":"+p.pid))}catch{}})' \
   2>/dev/null || true)"
 
 if [ "$OTHERS_BEFORE" = "$OTHERS_AFTER" ]; then
@@ -215,7 +215,7 @@ if [ -z "$HTTP_HOLDER" ]; then
 else
   echo "   Held by: $HTTP_HOLDER"
   echo "   Do NOT install a second web server. Add a vhost to the existing one:"
-  echo "     sudo cp deploy/nginx-vakeelsaathi.conf /etc/nginx/sites-available/${DOMAIN}"
+  echo "     sudo cp deploy/nginx-leylegal.conf /etc/nginx/sites-available/${DOMAIN}"
   echo "     sudo ln -s /etc/nginx/sites-available/${DOMAIN} /etc/nginx/sites-enabled/"
   echo "     sudo nginx -t && sudo systemctl reload nginx"
 fi

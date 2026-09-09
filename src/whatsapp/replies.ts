@@ -137,7 +137,7 @@ export function greetingNewUser(site = ''): string {
   return [
     '*Jai Hind!*',
     '',
-    'Welcome to *Vakeel Saathi*. I can help you with:',
+    'Welcome to *Ley Legal*. I can help you with:',
     CAPABILITIES,
     ...siteLine(site, 'Full app in your browser — same account, same credits:'),
     '',
@@ -178,7 +178,7 @@ export function greetingReturningToMenu(
   return [
     '*Jai Hind!*',
     '',
-    `Welcome back${who} to *Vakeel Saathi*. I can help you with:`,
+    `Welcome back${who} to *Ley Legal*. I can help you with:`,
     '1. Case Status (send CNR)',
     '2. Law Sections (e.g., IPC 420)',
     '3. Case Law / Precedents',
@@ -196,7 +196,7 @@ export function greetingReturning(name: string | null, credits = '', site = ''):
   return [
     '*Jai Hind!*',
     '',
-    `Welcome back${who} to *Vakeel Saathi*. I can help you with:`,
+    `Welcome back${who} to *Ley Legal*. I can help you with:`,
     CAPABILITIES,
     ...(credits ? ['', `_${credits}_`] : []),
     ...siteLine(site, 'Full app:'),
@@ -318,7 +318,7 @@ export const MAIN_MENU_SECTIONS = [
 export function welcome(name?: string | null): string {
   const greeting = name ? `Namaste ${name.split(' ')[0]}` : 'Namaste';
   return [
-    `${greeting} — welcome to *Vakeel Saathi* (वकील साथी).`,
+    `${greeting} — welcome to *Ley Legal*.`,
     '',
     'I am a legal research assistant for advocates practising in India. I can:',
     '',
@@ -512,7 +512,7 @@ export const PROCESSING_ERROR = [
 export const RESUME_WORDS = ['start', 'resume', 'unstop'] as const;
 
 export const UNSUBSCRIBED = [
-  'You will not receive further messages from Vakeel Saathi.',
+  'You will not receive further messages from Ley Legal.',
   '',
   'Our conversation history has been cleared. Send *start* whenever you want to use the service again.',
 ].join('\n');

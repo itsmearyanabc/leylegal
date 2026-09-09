@@ -66,7 +66,7 @@ module.exports = {
   apps: [
     {
       ...common,
-      name: 'vakeel-web',
+      name: 'leylegal-web',
       script: 'dist/main.js',
       // One instance. Fork mode rather than cluster: the in-process rate
       // limiters and caches are per-process, so a second instance would double
@@ -80,7 +80,7 @@ module.exports = {
     },
     {
       ...common,
-      name: 'vakeel-worker',
+      name: 'leylegal-worker',
       script: 'dist/worker.js',
       instances: 1,
       exec_mode: 'fork',

@@ -30,7 +30,7 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Vakeel Saathi — Control Panel</title>
+<title>Ley Legal — Control Panel</title>
 <style>
   /* Palette: olive green (primary), white (surfaces), red (alerts + accent).
      Olive carries navigation and confirmation; red is reserved for things that
@@ -233,9 +233,9 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
 <div id="login">
   <form class="login-card" onsubmit="doLogin(event)">
     <div class="brand">
-      <div class="brand-mark">VS</div>
+      <div class="brand-mark">LEY</div>
       <div>
-        <h1>Vakeel Saathi</h1>
+        <h1>Ley Legal</h1>
         <div class="tag">Control Panel</div>
       </div>
     </div>
@@ -272,9 +272,9 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
 <div id="app">
   <aside>
     <div class="brand">
-      <div class="brand-mark">VS</div>
+      <div class="brand-mark">LEY</div>
       <div>
-        <h1>Vakeel Saathi</h1>
+        <h1>Ley Legal</h1>
         <div class="tag">Control Panel</div>
       </div>
     </div>

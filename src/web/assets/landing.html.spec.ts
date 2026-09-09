@@ -122,7 +122,7 @@ describe('the landing page', () => {
     });
 
     it('falls back to a neutral mark when there is no name', () => {
-      expect(render({ signedIn: true, displayName: null })).toContain('>VS</span>');
+      expect(render({ signedIn: true, displayName: null })).toContain('>LEY</span>');
     });
   });
 

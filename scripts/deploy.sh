@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Deploy Vakeel Saathi on a shared VPS.
+# Deploy Ley Legal on a VPS.
 #
-# Written for a host that runs other people's production apps. Every step is
+# Written for a host that runs production apps. Every step is
 # scoped to this application by name or by path, and the script refuses rather
 # than guesses whenever it is not certain — a deploy script on a shared box
 # should fail loudly, never improvise.
@@ -18,8 +18,8 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$APP_DIR"
 
-WEB_APP="vakeel-web"
-WORKER_APP="vakeel-worker"
+WEB_APP="leylegal-web"
+WORKER_APP="leylegal-worker"
 REQUIRED_NODE_MAJOR=22
 
 say()  { printf '\n\033[1;32m==>\033[0m %s\n' "$1"; }

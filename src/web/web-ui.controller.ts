@@ -1,4 +1,6 @@
 import { Controller, Get, Header, HttpStatus, Res } from '@nestjs/common';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { FastifyReply } from 'fastify';
 import { RawResponse } from '../common/api-response';
 import { InjectEnv } from '../config/config.module';
@@ -53,6 +55,17 @@ export class WebUiController {
   @Header('x-content-type-options', 'nosniff')
   app(): RawResponse<string> {
     return new RawResponse(APP_HTML);
+  }
+
+  @Get('logo.jpg')
+  logo(@Res() reply: FastifyReply) {
+    const logoPath = resolve(process.cwd(), 'assets/logo.jpg');
+    if (existsSync(logoPath)) {
+      reply.header('content-type', 'image/jpeg');
+      reply.header('cache-control', 'public, max-age=86400');
+      return reply.send(readFileSync(logoPath));
+    }
+    return reply.status(HttpStatus.NOT_FOUND).send('Not found');
   }
 
   /**
@@ -131,7 +144,7 @@ export class WebUiController {
   @Get('status')
   status(@Res({ passthrough: true }) reply: FastifyReply) {
     reply.status(HttpStatus.OK);
-    return { service: 'vakeel-saathi', status: 'ok', app: '/app', health: '/health/ready' };
+    return { service: 'leylegal', status: 'ok', app: '/app', health: '/health/ready' };
   }
 }
 
@@ -154,14 +167,14 @@ const APP_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <meta name="color-scheme" content="light dark">
-<title>Vakeel Saathi</title>
+<title>Ley Legal</title>
 <style>${APP_CSS}</style>
 </head>
 <body>
 <noscript>
   <div style="max-width:520px;margin:80px auto;padding:24px;font-family:sans-serif;line-height:1.6">
     <h1 style="font-size:20px">JavaScript is required</h1>
-    <p>Vakeel Saathi's web app needs JavaScript. You can also use the service entirely
+    <p>Ley Legal's web app needs JavaScript. You can also use the service entirely
     over WhatsApp, which needs nothing but your phone.</p>
   </div>
 </noscript>

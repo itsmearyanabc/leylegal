@@ -1,7 +1,7 @@
-# Vakeel Saathi (वकील साथी)
+# Ley Legal
 
 AI legal research and case intelligence for Indian advocates, delivered over
-WhatsApp.
+WhatsApp and Web.
 
 Ask a question in English, Hindi or Hinglish and get back cited precedents,
 statutory explanations with IPC↔BNS mappings, or case status by CNR — with

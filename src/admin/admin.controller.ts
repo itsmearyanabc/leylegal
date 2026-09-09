@@ -354,7 +354,7 @@ export class AdminController {
     const result = await this.whatsapp.sendText(
       to,
       body?.message?.trim() ||
-        '*Vakeel Saathi test message*\n\nIf you can read this, the WhatsApp connection is working.',
+        '*Ley Legal test message*\n\nIf you can read this, the WhatsApp connection is working.',
     );
 
     return {

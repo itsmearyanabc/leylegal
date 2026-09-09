@@ -105,7 +105,7 @@ async function bootstrap(): Promise<void> {
       whatsapp: env.whatsappConfigured ? 'configured' : 'log-only (no credentials)',
       webhookUrl: `${env.APP_PUBLIC_URL}/webhooks/whatsapp`,
     },
-    'Vakeel Saathi web process started',
+    'Ley Legal web process started',
   );
 
   if (!env.whatsappConfigured) {

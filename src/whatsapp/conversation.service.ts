@@ -772,7 +772,7 @@ export class ConversationService {
         'What would you like to do?',
         'Open menu',
         Replies.MAIN_MENU_SECTIONS,
-        { header: 'Vakeel Saathi', footer: 'Or just type your legal question' },
+        { header: 'Ley Legal', footer: 'Or just type your legal question' },
       ),
     );
   }
@@ -934,7 +934,7 @@ export class ConversationService {
         : [
             '*Account linked.*',
             '',
-            'This number is now confirmed on your Vakeel Saathi account. You can use WhatsApp or the website with the same credits.',
+            'This number is now confirmed on your Ley Legal account. You can use WhatsApp or the website with the same credits.',
           ].join('\n'),
     );
 

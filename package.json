@@ -1,7 +1,7 @@
 {
-  "name": "vakeel-saathi-core",
+  "name": "leylegal",
   "version": "1.0.0",
-  "description": "Vakeel Saathi - AI legal research and case intelligence for Indian advocates, over WhatsApp",
+  "description": "Ley Legal - AI legal research and case intelligence for Indian advocates, over WhatsApp and Web",
   "license": "UNLICENSED",
   "private": true,
   "engines": {

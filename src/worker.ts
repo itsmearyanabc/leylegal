@@ -37,7 +37,7 @@ async function bootstrap(): Promise<void> {
       concurrency: env.WORKER_CONCURRENCY,
       ecourtsMode: env.ECOURTS_MODE,
     },
-    'Vakeel Saathi worker process started',
+    'Ley Legal worker process started',
   );
 
   const shutdown = async (signal: string): Promise<void> => {

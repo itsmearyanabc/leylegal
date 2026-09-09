@@ -50,18 +50,18 @@ export class EmailService {
   async sendVerification(to: string, link: string): Promise<EmailResult> {
     return this.send({
       to,
-      subject: 'Confirm your email — Vakeel Saathi',
+      subject: 'Confirm your email — Ley Legal',
       heading: 'Confirm your email address',
       body: 'Tap the button below to confirm this address belongs to you. The link is valid for 24 hours.',
       cta: { label: 'Confirm email', href: link },
-      footer: 'If you did not create a Vakeel Saathi account, you can ignore this message.',
+      footer: 'If you did not create a Ley Legal account, you can ignore this message.',
     });
   }
 
   async sendPasswordReset(to: string, link: string): Promise<EmailResult> {
     return this.send({
       to,
-      subject: 'Reset your password — Vakeel Saathi',
+      subject: 'Reset your password — Ley Legal',
       heading: 'Reset your password',
       body: 'Tap the button below to choose a new password. The link is valid for one hour and can be used once.',
       cta: { label: 'Choose a new password', href: link },
@@ -160,7 +160,7 @@ function renderEmail(message: {
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F4F6EC;padding:32px 16px;">
     <tr><td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#FFFFFF;border:1px solid #D9E2C4;border-radius:14px;padding:32px;">
-        <tr><td style="font-size:18px;font-weight:700;color:#1C2411;padding-bottom:4px;">Vakeel Saathi</td></tr>
+        <tr><td style="font-size:18px;font-weight:700;color:#1C2411;padding-bottom:4px;">Ley Legal</td></tr>
         <tr><td style="font-size:13px;color:#5A6B45;padding-bottom:24px;">Legal research for Indian advocates</td></tr>
         <tr><td style="font-size:20px;font-weight:700;color:#1C2411;padding-bottom:12px;">${escape(message.heading)}</td></tr>
         <tr><td style="font-size:15px;line-height:1.6;color:#3A4A28;padding-bottom:24px;">${escape(message.body)}</td></tr>

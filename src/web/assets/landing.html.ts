@@ -71,7 +71,7 @@ export function esc(value: unknown): string {
 /** Initials for the account chip. Falls back to a neutral mark, never to blank. */
 function initials(name: string | null): string {
   const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return 'VS';
+  if (parts.length === 0) return 'LEY';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
@@ -89,6 +89,16 @@ function waDigits(value: string): string {
  * that nothing competes with the words.
  */
 const ICON = {
+  leyLogo:
+    '<svg width="24" height="24" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">' +
+    '<rect x="23" y="10" width="10" height="42" rx="4"/>' +
+    '<circle cx="28" cy="12" r="5"/>' +
+    '<circle cx="28" cy="48" r="5"/>' +
+    '<rect x="10" y="52" width="16" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="4"/>' +
+    '<rect x="26" y="52" width="22" height="24" rx="4"/>' +
+    '<path d="M54 26 h18 v6 h-12 v14 h10 v6 h-10 v16 h12 v6 h-18 z"/>' +
+    '<path d="M78 26 l7 22 l7 -22 h6 l-10 28 v18 h-6 v-18 l-10 -28 z"/>' +
+    '</svg>',
   gavel:
     '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -416,7 +426,7 @@ const ENHANCE =
 export function renderLanding(view: LandingView, css: string): string {
   const notice = previewNotice(view);
   const canonical = view.publicUrl.replace(/\/+$/, '') + '/';
-  const title = 'Vakeel Saathi — verified legal research for Indian advocates';
+  const title = 'Ley Legal — verified legal research for Indian advocates';
   const description =
     'Precedents, statutory sections with IPC–BNS mapping, and case status by CNR ' +
     'for Indian advocates. Every citation is verified against the database before it ' +
@@ -437,7 +447,7 @@ export function renderLanding(view: LandingView, css: string): string {
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${esc(canonical)}">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Vakeel Saathi">
+<meta property="og:site_name" content="Ley Legal">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:url" content="${esc(canonical)}">
@@ -450,8 +460,8 @@ ${notice ?? ''}
 <header class="site-header">
   <div class="wrap">
     <a class="brand" href="/">
-      <span class="en">Vakeel Saathi</span>
-      <span class="hi">&#2357;&#2325;&#2368;&#2354; &#2360;&#2366;&#2341;&#2368;</span>
+      <span class="logo-mark">${ICON.leyLogo}</span>
+      <span class="en">Ley Legal</span>
     </a>
     <nav class="site-nav" aria-label="Sections">
       <a href="#features">Features</a>
@@ -654,8 +664,8 @@ ${notice ?? ''}
     <div class="footer-grid">
       <div>
         <a class="brand" href="/">
-          <span class="en">Vakeel Saathi</span>
-          <span class="hi">&#2357;&#2325;&#2368;&#2354; &#2360;&#2366;&#2341;&#2368;</span>
+          <span class="logo-mark">${ICON.leyLogo}</span>
+          <span class="en">Ley Legal</span>
         </a>
         <p class="footer-blurb">
           Legal research and case intelligence for Indian advocates, with every citation
@@ -691,12 +701,12 @@ ${notice ?? ''}
     </div>
     <div class="legal">
       <p>
-        Vakeel Saathi is a research tool for legal professionals. It does not provide
+        Ley Legal is a research tool for legal professionals. It does not provide
         legal advice, does not create an advocate&#8211;client relationship, and is not a
         substitute for your own reading of the reported text or for professional
         judgment. Verify every authority before relying on it.
       </p>
-      <p>&#169; ${esc(view.year)} Vakeel Saathi</p>
+      <p>&#169; ${esc(view.year)} Ley Legal</p>
     </div>
   </div>
 </footer>

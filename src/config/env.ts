@@ -41,7 +41,7 @@ const envSchema = z.object({
 
   SUPABASE_URL: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
-  SUPABASE_STORAGE_BUCKET: z.string().default('vakeel-documents'),
+  SUPABASE_STORAGE_BUCKET: z.string().default('leylegal-documents'),
 
   // --- Job queue ------------------------------------------------------------
   // Postgres-backed since migration 0013. There is no Redis in this service.
@@ -366,7 +366,7 @@ const envSchema = z.object({
    */
   EMAIL_PROVIDER: z.enum(['log', 'resend']).default('log'),
   RESEND_API_KEY: z.string().default(''),
-  EMAIL_FROM: z.string().default('Vakeel Saathi <onboarding@resend.dev>'),
+  EMAIL_FROM: z.string().default('Ley Legal <onboarding@resend.dev>'),
 
   // --- Payments (Razorpay) --------------------------------------------------
   // No gateway calls are made anywhere in this build. These exist so the
