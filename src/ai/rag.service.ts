@@ -282,6 +282,17 @@ export class RagService {
  * question, not a provision lookup, and answering it as though a provision had
  * been named would invite the model to pick one.
  */
+const ACT_FULL_NAMES: Record<string, string> = {
+  IPC: 'Indian Penal Code (IPC)',
+  BNS: 'Bharatiya Nyaya Sanhita (BNS)',
+  CRPC: 'Code of Criminal Procedure (CrPC)',
+  BNSS: 'Bharatiya Nagarik Suraksha Sanhita (BNSS)',
+  IEA: 'Indian Evidence Act (IEA)',
+  BSA: 'Bharatiya Sakshya Adhiniyam (BSA)',
+  CPC: 'Civil Procedure Code (CPC)',
+  COI: 'Constitution of India',
+};
+
 function describeProvision(intent: ClassifiedIntent): string | null {
   if (!intent.sectionNumber) return null;
 
@@ -290,5 +301,9 @@ function describeProvision(intent: ClassifiedIntent): string | null {
 
   // "Order 32" already reads as a provision; a bare "302" needs the word.
   const head = /^(order|rule|article)\b/i.test(provision) ? provision : `Section ${provision}`;
-  return act ? `${head} ${act}` : head;
+  
+  if (!act) return head;
+  const actName = ACT_FULL_NAMES[act] ?? act;
+  return `${head} of the ${actName}`;
 }
+
