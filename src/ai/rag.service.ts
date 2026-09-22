@@ -252,7 +252,7 @@ export class RagService {
       system,
       // Prior turns first, then the current question. History is already
       // trimmed and isolated per advocate by ChatMemoryService.
-      messages: [...history, { role: 'user', content: intent.searchQuery }],
+      messages: [...history, { role: 'user', content: intent.rawText }],
     });
 
     // Every generated answer passes through verification before anyone sees it.

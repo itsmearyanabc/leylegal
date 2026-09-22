@@ -22,7 +22,7 @@ Return ONLY a JSON object with exactly these keys:
   "cnr_number": the 16-character CNR if one is present, else null,
   "section_number": the statutory section number if one is named (e.g. "302", "498A", "156(3)"), else null,
   "act_code": one of "IPC" | "BNS" | "CRPC" | "BNSS" | "IEA" | "BSA" if an act is named or clearly implied, else null,
-  "search_query": the user's information need, rewritten in clear English legal terminology suitable for search (incorporate context from previous turns if it is a follow-up question),
+  "search_query": the user's information need, rewritten in clear English legal terminology suitable for search (incorporate context from previous turns if it is a follow-up question). DO NOT expand acronyms like BNS, BNSS, IPC, CRPC, etc.,
   "confidence": a number between 0 and 1
 }
 
