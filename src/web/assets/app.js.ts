@@ -95,17 +95,31 @@ const post = (path, payload) => api(path, { method: 'POST', body: JSON.stringify
 
 async function boot() {
   applyStoredTheme();
+  watchPasswordFields();
 
-  try {
-    state.config = await api('/api/auth/config');
-  } catch (_) {
-    state.config = { google: false, emailRecovery: false, passwordMinLength: 10, payments: false };
-  }
+  const path = location.pathname;
+  const tokenScreen = path === '/app/reset-password' || path === '/app/verify-email';
+
+  /*
+   * All three at once.
+   *
+   * They were fetched one after another - config, then the session, then the
+   * conversation list - and each of the last two waits on a database in
+   * Sydney. In sequence that was most of the pause behind "Dashboard", spent
+   * on a blank page. None depends on another's answer: a signed-out visitor's
+   * session and threads calls simply fail, and are ignored.
+   */
+  const configLoad = api('/api/auth/config').catch(() => (
+    { google: false, emailRecovery: false, passwordMinLength: 10, payments: false }
+  ));
+  const sessionLoad = tokenScreen ? null : api('/api/auth/me').catch(() => null);
+  const threadsLoad = tokenScreen ? null : loadThreadList();
+
+  state.config = await configLoad;
 
   // Standalone token screens are reachable while signed out and must be handled
   // before the session check, or an advocate resetting a forgotten password is
   // bounced to the sign-in form they cannot get past.
-  const path = location.pathname;
   if (path === '/app/reset-password') return renderResetPassword();
   if (path === '/app/verify-email')  return renderVerifyEmail();
 
@@ -119,12 +133,20 @@ async function boot() {
     history.replaceState({}, '', '/app');
   }
 
+  const me = await sessionLoad;
+  if (!me) return renderAuth();
+
   try {
-    await loadSession();
-    await enterApp();
+    applySession(me);
+    await enterApp(threadsLoad);
   } catch (_) {
     renderAuth();
   }
+}
+
+/** The conversation list, or null when it cannot be had - never a rejection. */
+function loadThreadList() {
+  return api('/api/chat/threads').catch(() => null);
 }
 
 /**
@@ -140,10 +162,89 @@ async function boot() {
  * tests by refreshing.
  */
 async function loadSession() {
-  const me = await api('/api/auth/me');
+  applySession(await api('/api/auth/me'));
+}
+
+function applySession(me) {
   state.user = me.user;
   state.credits = me.credits;
   state.capabilities = me.capabilities;
+}
+
+/**
+ * Put a button into its working state, and hand back the way out of it.
+ *
+ * A form that went quiet for a second after "Sign in" read as broken - there
+ * was nothing on screen to say anything was happening. The label changes and
+ * a spinner turns, and the original returns on failure.
+ */
+function buttonBusy(button, label) {
+  if (!button) return () => {};
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.classList.add('busy');
+  button.innerHTML = '<span class="spinner" aria-hidden="true"></span>' + esc(label);
+  return () => {
+    button.disabled = false;
+    button.classList.remove('busy');
+    button.innerHTML = original;
+  };
+}
+
+// ============================================================================
+// Show / hide password
+// ============================================================================
+
+const ICON_EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const ICON_EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 8 10 8a17.6 17.6 0 0 1-2.16 3.19"/>' +
+  '<path d="M6.61 6.61A17.4 17.4 0 0 0 2 12s3.5 8 10 8a9.7 9.7 0 0 0 5.39-1.61"/>' +
+  '<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="M2 2l20 20"/></svg>';
+
+/**
+ * An eye on every password field, on every screen.
+ *
+ * Watched for rather than added screen by screen: passwords are asked for on
+ * sign-in, sign-up, both reset flows and the account screen, and a field added
+ * to a sixth place later should get the eye without anyone remembering to.
+ */
+function watchPasswordFields() {
+  const scan = (root) => {
+    if (root.matches && root.matches('input[type="password"]')) addPasswordToggle(root);
+    if (root.querySelectorAll) root.querySelectorAll('input[type="password"]').forEach(addPasswordToggle);
+  };
+  scan(document.body);
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) if (node.nodeType === 1) scan(node);
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
+function addPasswordToggle(input) {
+  if (input.dataset.eye) return;
+  input.dataset.eye = '1';
+
+  const wrap = el('div', 'pw-wrap');
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  // type=button, so it can never submit the form it sits in.
+  const toggle = el('button', 'pw-toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-label', 'Show password');
+  toggle.innerHTML = ICON_EYE;
+  toggle.onclick = () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    toggle.innerHTML = show ? ICON_EYE_OFF : ICON_EYE;
+    toggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    input.focus();
+  };
+  wrap.appendChild(toggle);
 }
 
 // ============================================================================
@@ -186,8 +287,6 @@ function renderAuth() {
       '<form id="auth-form">' +
         (signup ? field('fullName', 'Full name', 'text', 'As it appears on your enrolment') : '') +
         field('email', 'Email', 'email', 'you@example.com') +
-        (signup ? field('phoneNumber', 'WhatsApp number', 'tel',
-                        'With country code, e.g. 919876543210. We send a code here.') : '') +
         field('password', 'Password', 'password',
               signup ? 'At least ' + state.config.passwordMinLength + ' characters' : '') +
         '<button class="btn block" type="submit">' +
@@ -219,8 +318,8 @@ function renderAuth() {
 
   $('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
-    const button = $('#auth-form button');
-    button.disabled = true;
+    const restore = buttonBusy($('#auth-form button[type="submit"]'),
+                              signup ? 'Creating your account…' : 'Signing in…');
     showAuthError('');
 
     try {
@@ -230,7 +329,6 @@ function renderAuth() {
       };
       if (signup) {
         payload.fullName = $('#f-fullName').value.trim();
-        payload.phoneNumber = $('#f-phoneNumber').value.trim();
       }
 
       await post(signup ? '/api/auth/signup' : '/api/auth/login', payload);
@@ -245,15 +343,14 @@ function renderAuth() {
        *
        * The session cookie is set by the response above; everything the app
        * needs comes from one place so the two entry paths cannot diverge again.
+       * The conversation list is asked for alongside it rather than after.
        */
+      const threadsLoad = loadThreadList();
       await loadSession();
-      await enterApp();
+      await enterApp(threadsLoad);
     } catch (err) {
-      // An existing account that predates verification lands here on sign-in:
-      // the credentials are right and the gate is still down.
-      if (err.code === 'PHONE_UNVERIFIED') return renderVerifyPhone(null);
       showAuthError(err.message);
-      button.disabled = false;
+      restore();
     }
   };
 }
@@ -283,87 +380,6 @@ function showAuthError(message) {
   box.innerHTML = message ? '<div class="alert error">' + esc(message) + '</div>' : '';
 }
 
-/**
- * The code screen.
- *
- * Reached two ways: straight after signing up, and after signing in to an
- * account created before verification existed. The info argument carries the
- * delivery result when there is one - on the sign-in path there is not,
- * because nothing was sent, which is why resend is offered rather than assumed.
- */
-function renderVerifyPhone(info) {
-  var sentTo = info && info.phoneNumber ? info.phoneNumber : '';
-  var failed = info && info.sent === false;
-
-  document.body.innerHTML =
-    '<div id="auth"><div class="auth-card">' + brandMarkup() +
-      '<h1>Verify your WhatsApp</h1>' +
-      '<p class="sub">' +
-        (sentTo
-          ? 'We sent a six-digit code to ' + esc(sentTo) + '.'
-          : 'Enter the six-digit code we sent to your WhatsApp.') +
-      '</p>' +
-      '<div id="auth-error"></div>' +
-      '<form id="auth-form">' +
-        '<div class="field"><label for="f-code">Code</label>' +
-          '<input id="f-code" type="text" inputmode="numeric" autocomplete="one-time-code" ' +
-                 'maxlength="6" pattern="[0-9]{6}" required>' +
-          '<div class="hint">It expires in ten minutes.</div></div>' +
-        '<button class="btn block" type="submit">Verify</button>' +
-      '</form>' +
-      '<div style="text-align:center;margin-top:14px">' +
-        '<button class="forgot" id="resend">Send another code</button></div>' +
-      '<div class="auth-switch"><button id="switch">Back to sign in</button></div>' +
-    '</div></div>';
-
-  // A failed delivery is shown immediately rather than after a wasted wait for
-  // a code that is not coming.
-  if (failed) showAuthError(info.message || 'We could not send the code.');
-
-  $('#switch').onclick = function () {
-    // Sign out first: the session is live but gated, and leaving it in place
-    // means the sign-in form would be rendered for somebody already holding a
-    // cookie, which reads as the form silently doing nothing.
-    post('/api/auth/logout', {}).catch(function () {}).then(function () {
-      state.user = null;
-      state.authMode = 'signin';
-      renderAuth();
-    });
-  };
-
-  $('#resend').onclick = function () {
-    var button = $('#resend');
-    button.disabled = true;
-    showAuthError('');
-    post('/api/auth/phone/resend', {}).then(function (r) {
-      $('#auth-error').innerHTML =
-        '<div class="alert info">Sent again' +
-        (r && r.phoneNumber ? ' to ' + esc(r.phoneNumber) : '') + '.</div>';
-      button.disabled = false;
-    }).catch(function (err) {
-      showAuthError(err.message);
-      button.disabled = false;
-    });
-  };
-
-  $('#auth-form').onsubmit = async function (event) {
-    event.preventDefault();
-    var button = $('#auth-form button');
-    button.disabled = true;
-    showAuthError('');
-
-    try {
-      await post('/api/auth/phone/verify-code', { code: $('#f-code').value.trim() });
-      // The gate is lifted from this point, so the ordinary entry path works.
-      await loadSession();
-      await enterApp();
-    } catch (err) {
-      showAuthError(err.message);
-      button.disabled = false;
-    }
-  };
-}
-
 function renderForgotPassword() {
   document.body.innerHTML =
     '<div id="auth"><div class="auth-card">' + brandMarkup() +
@@ -378,8 +394,8 @@ function renderForgotPassword() {
   $('#switch').onclick = () => { state.authMode = 'signin'; renderAuth(); };
   $('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
-    const button = $('#auth-form button');
-    button.disabled = true;
+    const button = $('#auth-form button[type="submit"]');
+    const restore = buttonBusy(button, 'Sending…');
     try {
       await post('/api/auth/password/forgot', { email: $('#f-email').value.trim() });
       // Deliberately the same whether or not the address is registered - see
@@ -387,9 +403,11 @@ function renderForgotPassword() {
       $('#auth-error').innerHTML =
         '<div class="alert info">If that address has an account, a reset link is on its way. ' +
         'The link is valid for one hour.</div>';
+      restore();
+      button.disabled = true;
     } catch (err) {
       showAuthError(err.message);
-      button.disabled = false;
+      restore();
     }
   };
 }
@@ -430,8 +448,7 @@ function renderForgotByPhone() {
 
   $('#request-form').onsubmit = async function (event) {
     event.preventDefault();
-    var button = $('#request-form button');
-    button.disabled = true;
+    var restore = buttonBusy($('#request-form button[type="submit"]'), 'Sending…');
     showAuthError('');
     try {
       await post('/api/auth/password/forgot-phone', {
@@ -446,13 +463,12 @@ function renderForgotByPhone() {
     } catch (err) {
       showAuthError(err.message);
     }
-    button.disabled = false;
+    restore();
   };
 
   $('#auth-form').onsubmit = async function (event) {
     event.preventDefault();
-    var button = $('#auth-form button');
-    button.disabled = true;
+    var restore = buttonBusy($('#auth-form button[type="submit"]'), 'Saving…');
     showAuthError('');
     try {
       await post('/api/auth/password/reset-phone', {
@@ -468,7 +484,7 @@ function renderForgotByPhone() {
         '<div class="alert info">Password updated. Sign in with your new password.</div>';
     } catch (err) {
       showAuthError(err.message);
-      button.disabled = false;
+      restore();
     }
   };
 }
@@ -489,8 +505,7 @@ function renderResetPassword() {
 
   $('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
-    const button = $('#auth-form button');
-    button.disabled = true;
+    const restore = buttonBusy($('#auth-form button[type="submit"]'), 'Saving…');
     try {
       await post('/api/auth/password/reset', { token, password: $('#f-password').value });
       $('#auth-error').innerHTML =
@@ -498,7 +513,7 @@ function renderResetPassword() {
       $('#auth-form').style.display = 'none';
     } catch (err) {
       showAuthError(err.message);
-      button.disabled = false;
+      restore();
     }
   };
 }
@@ -522,14 +537,23 @@ async function renderVerifyEmail() {
 // App shell
 // ============================================================================
 
-async function enterApp() {
+/**
+ * Draw the app, then fill it in.
+ *
+ * threadsLoad is the conversation list already on its way - boot and the
+ * sign-in form both start it alongside the session request, so by the time
+ * the shell is on screen it has usually arrived. Until it does, the sidebar
+ * shows placeholder rows rather than "No conversations yet", which would be
+ * false for most people for the half second it was visible.
+ */
+async function enterApp(threadsLoad) {
   document.body.innerHTML =
     '<div id="app" class="ready">' +
       '<aside class="sidebar" id="sidebar">' +
         '<div class="sidebar-head">' + brandMarkup() +
           '<button class="btn block" id="new-chat">New chat</button>' +
         '</div>' +
-        '<div class="thread-list" id="thread-list"></div>' +
+        '<div class="thread-list" id="thread-list">' + THREAD_SKELETON + '</div>' +
         '<div class="sidebar-foot">' +
           '<button class="credit-chip" id="credit-chip"></button>' +
           '<button class="account-btn" id="account-btn"></button>' +
@@ -573,10 +597,15 @@ async function enterApp() {
 
   renderAccountButton();
   renderCredits();
-  await loadThreads();
+  // The message area and composer are usable before the list arrives.
   renderMessages();
   composer.focus();
+  await loadThreads(threadsLoad);
 }
+
+const THREAD_SKELETON =
+  '<div class="skeleton-row"></div><div class="skeleton-row short"></div>' +
+  '<div class="skeleton-row"></div><div class="skeleton-row short"></div>';
 
 function autoGrow() {
   const node = $('#composer');
@@ -602,12 +631,10 @@ function toggleSidebar() {
 // Threads
 // ============================================================================
 
-async function loadThreads() {
-  try {
-    state.threads = await api('/api/chat/threads');
-  } catch (_) {
-    state.threads = [];
-  }
+async function loadThreads(prefetched) {
+  // A list fetched in advance is used once; every later refresh asks again.
+  const threads = prefetched ? await prefetched : await loadThreadList();
+  state.threads = threads || [];
   renderThreadList();
 }
 

@@ -446,6 +446,65 @@ button { cursor:pointer; }
   .empty { margin-top:32px; }
 }
 
+/* ==========================================================================
+   Loading, and getting from one screen to the next
+   ========================================================================== */
+/* In the HTML itself, so it is on screen before a byte of script has run. */
+#boot {
+  position:fixed; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:14px; background:var(--bg);
+  animation:fade-in .2s ease both;
+}
+.boot-mark {
+  width:52px; height:52px; border-radius:15px; background:var(--accent); color:var(--accent-ink);
+  display:flex; align-items:center; justify-content:center;
+  font-weight:800; font-size:19px; letter-spacing:-.02em;
+  animation:breathe 1.6s ease-in-out infinite;
+}
+.boot-name { font-weight:700; font-size:15px; letter-spacing:-.2px; }
+.boot-bar { width:140px; height:3px; border-radius:3px; background:var(--surface-3); overflow:hidden; }
+.boot-bar span {
+  display:block; width:40%; height:100%; border-radius:3px; background:var(--accent);
+  animation:slide 1.1s ease-in-out infinite;
+}
+
+.auth-card { animation:rise .28s ease both; }
+#app.ready { animation:fade-in .22s ease both; }
+
+/* Placeholder rows while the conversation list is on its way. */
+.skeleton-row {
+  height:30px; margin:6px 4px; border-radius:8px;
+  background:linear-gradient(90deg, var(--surface-3) 0%, var(--surface) 50%, var(--surface-3) 100%);
+  background-size:200% 100%; animation:shimmer 1.2s linear infinite;
+}
+.skeleton-row.short { width:62%; }
+
+/* A spinner inside a button takes the button's own ink, in either theme. */
+.btn .spinner { border-color:currentColor; border-top-color:transparent; opacity:.85; }
+.btn.busy:disabled { opacity:.8; cursor:progress; }
+
+@keyframes fade-in { from { opacity:0; } to { opacity:1; } }
+@keyframes rise { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+@keyframes breathe { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.06); } }
+@keyframes slide { from { transform:translateX(-100%); } to { transform:translateX(250%); } }
+@keyframes shimmer { from { background-position:200% 0; } to { background-position:-200% 0; } }
+
+/* ==========================================================================
+   Show / hide password
+   ========================================================================== */
+.pw-wrap { position:relative; }
+.pw-wrap input { padding-right:46px !important; }
+.pw-toggle {
+  position:absolute; top:50%; right:6px; transform:translateY(-50%);
+  width:34px; height:34px; padding:0; border:0; border-radius:6px;
+  display:flex; align-items:center; justify-content:center;
+  background:transparent; color:var(--dim);
+}
+.pw-toggle:hover { color:var(--text); background:var(--surface-2); }
+.pw-toggle svg { width:18px; height:18px; }
+/* Edge draws its own eye; two side by side would be one too many. */
+input::-ms-reveal, input::-ms-clear { display:none; }
+
 @media (prefers-reduced-motion:reduce) {
   * { animation-duration:.01ms !important; transition-duration:.01ms !important; }
 }

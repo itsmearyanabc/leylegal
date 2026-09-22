@@ -112,7 +112,6 @@ export class AuthController {
       this.auth.signUp({
         email: body?.email ?? '',
         password: body?.password ?? '',
-        phoneNumber: body?.phoneNumber ?? '',
         fullName: body?.fullName ?? null,
         userAgent: req.headers['user-agent'] ?? null,
         ip: req.ip ?? null,

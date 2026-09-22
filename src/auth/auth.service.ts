@@ -9,7 +9,6 @@ import { UserRepository } from '../database/repositories/user.repository';
 import { UserRow, WebSessionRow } from '../database/types';
 import { EmailService } from './email.service';
 import { GoogleProfile } from './google-oauth.service';
-import { normalisePhone } from './phone-link.service';
 import { hashPassword, needsRehash, passwordProblem, verifyPassword } from './password';
 import { generateToken, hashToken } from './tokens';
 
@@ -118,7 +117,6 @@ export class AuthService {
   async signUp(input: {
     email: string;
     password: string;
-    phoneNumber: string;
     fullName: string | null;
     userAgent: string | null;
     ip: string | null;
@@ -130,30 +128,16 @@ export class AuthService {
     }
 
     /*
-     * The number is validated here and deliberately not stored.
+     * No WhatsApp number.
      *
-     * `users.phone_number` is UNIQUE, so writing an unproven number would let
-     * anyone reserve a handset they do not own simply by typing it into the
-     * signup form - and the real owner would then be unable to register at all.
-     * The claim lives in the verification token's `subject` until a code proves
-     * it, and PhoneVerificationService writes it to the row at that point.
+     * It was required here, validated, checked against every other account -
+     * and then thrown away, because an unproven number is never stored (the
+     * column is UNIQUE, and storing one would let anyone reserve a handset
+     * they do not own). With signup sending no code, nothing ever proved it,
+     * so the field only turned people away: a mistyped number, or one already
+     * talking to the bot, refused the account outright. A number is linked
+     * from the account screen, by a message from that handset.
      */
-    const phoneNumber = normalisePhone(input.phoneNumber);
-    if (phoneNumber.length < 10 || phoneNumber.length > 15) {
-      throw new AuthError('INVALID_PHONE', 'Enter your WhatsApp number in international format, e.g. 919876543210.');
-    }
-
-    // Refused up front rather than at verification, so the person is told
-    // before they wait for a code that can never succeed. The check is repeated
-    // after the code is proven, because these two moments are minutes apart.
-    const numberOwner = await this.users.findByPhone(phoneNumber);
-    if (numberOwner && (numberOwner.password_hash || numberOwner.email)) {
-      throw new AuthError(
-        'PHONE_TAKEN',
-        'An account already exists for this WhatsApp number. Try signing in instead.',
-      );
-    }
-
     const weak = passwordProblem(input.password, this.env.PASSWORD_MIN_LENGTH);
     if (weak) throw new AuthError('WEAK_PASSWORD', weak);
 

@@ -325,25 +325,6 @@ const envSchema = z.object({
   LEGAL_OPERATOR_NAME: z.string().default(''),
   LEGAL_CONTACT_EMAIL: z.string().default(''),
 
-  /*
-   * Whether an unverified number blocks access.
-   *
-   * Exists because the gate and the thing that lifts it go live at different
-   * moments: the code ships when it is ready, and the WhatsApp template it
-   * depends on ships when Meta finishes reviewing it. Deploying the gate into
-   * that window locks out every existing account and every new signup, with no
-   * way through, because the codes that would open it cannot be sent yet.
-   *
-   * Defaults to OFF, and that default is load-bearing rather than cautious.
-   * Signup no longer sends a code at all (see AuthController.signUp), so an
-   * enforced gate with nothing issuing codes locks out every new account by
-   * construction. Turn it on only together with a verification step that runs.
-   */
-  PHONE_VERIFICATION_REQUIRED: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((v) => v === 'true'),
-
   // --- Google sign-in -------------------------------------------------------
   // Both must be set for the button to appear. The flow is the server-side
   // authorization-code flow: the browser never sees the client secret, and the

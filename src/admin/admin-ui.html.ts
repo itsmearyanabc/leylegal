@@ -93,6 +93,15 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
     transition:border-color .12s,box-shadow .12s}
   input:focus,select:focus,textarea:focus{
     border-color:var(--accent);box-shadow:0 0 0 3.5px var(--border)}
+  /* Show / hide password. */
+  .pw-wrap{position:relative}
+  .pw-wrap input{padding-right:46px}
+  .pw-toggle{position:absolute;top:50%;right:6px;transform:translateY(-50%);width:34px;height:34px;
+    padding:0;border:0;border-radius:6px;display:flex;align-items:center;justify-content:center;
+    background:transparent;color:var(--muted);cursor:pointer}
+  .pw-toggle:hover{color:var(--text);background:var(--panel-2)}
+  .pw-toggle svg{width:18px;height:18px}
+  input::-ms-reveal,input::-ms-clear{display:none}
   .btn{background:var(--accent);color:var(--accent-ink);border:none;padding:10px 18px;
        border-radius:9px;font-weight:650;transition:background .12s,transform .06s}
   .btn:hover{background:var(--accent-dim)}
@@ -251,7 +260,10 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
       </div>
       <div class="field">
         <label for="password">Password</label>
-        <input id="password" type="password" placeholder="••••••••••" autocomplete="current-password">
+        <div class="pw-wrap">
+          <input id="password" type="password" placeholder="••••••••••" autocomplete="current-password">
+          <button class="pw-toggle" type="button" data-for="password" aria-label="Show password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
       </div>
     </div>
 
@@ -259,7 +271,10 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
     <div id="tokenFields" style="display:none">
       <div class="field">
         <label for="token">Admin token</label>
-        <input id="token" type="password" placeholder="Your JWT_SECRET value" autocomplete="current-password">
+        <div class="pw-wrap">
+          <input id="token" type="password" placeholder="Your JWT_SECRET value" autocomplete="current-password">
+          <button class="pw-toggle" type="button" data-for="token" aria-label="Show password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
         <p class="help" id="tokenHelp"></p>
       </div>
     </div>
@@ -1699,6 +1714,18 @@ function sendTestMessage() {
    Start
    ========================================================================= */
 (function init() {
+  // The eye beside each password field: shows what was typed, and hides it again.
+  document.querySelectorAll('.pw-toggle').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var input = document.getElementById(button.getAttribute('data-for'));
+      var show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      button.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+      button.style.color = show ? 'var(--text)' : '';
+      input.focus();
+    });
+  });
+
   var saved = localStorage.getItem('vs_theme');
   if (saved) document.documentElement.setAttribute('data-theme', saved);
 

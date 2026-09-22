@@ -34,7 +34,7 @@ function controller() {
   return { instance, phones, auth };
 }
 
-const body = { email: 'a@b.co', password: 'a-long-enough-password', phoneNumber: '919876543210' };
+const body = { email: 'a@b.co', password: 'a-long-enough-password' };
 const request = { headers: {}, ip: '1.2.3.4' };
 
 describe('signing up', () => {
@@ -67,18 +67,24 @@ describe('signing up', () => {
 });
 
 describe('the gate that used to stand behind it', () => {
-  const env = readFileSync(join(process.cwd(), 'src/config/env.ts'), 'utf8');
+  /*
+   * Gone, not merely off. It was switched by PHONE_VERIFICATION_REQUIRED, and
+   * .env.example shipped that set to true - so a deployment configured from
+   * the template refused every new account on its first request, with a code
+   * screen for a code nothing sends.
+   */
+  const read = (path: string) => readFileSync(join(process.cwd(), path), 'utf8');
 
-  it('is off by default', () => {
-    /*
-     * Load-bearing, not cautious. Signup no longer issues a code, so an
-     * enforced gate with nothing to satisfy it locks out every new account by
-     * construction - the account is created, and the first authenticated
-     * request it makes is refused forever.
-     */
-    const block = /PHONE_VERIFICATION_REQUIRED: z[\s\S]{0,200}?\.default\('(true|false)'\)/.exec(env);
+  it('is not in the guard', () => {
+    const guard = read('src/auth/user-auth.guard.ts');
+    expect(guard).not.toContain('PHONE_UNVERIFIED');
+    expect(guard).not.toContain('ForbiddenException');
+  });
 
-    expect(block?.[1]).toBe('false');
+  it('has no setting left to switch it back on', () => {
+    expect(read('src/config/env.ts')).not.toContain('PHONE_VERIFICATION_REQUIRED');
+    expect(read('src/settings/settings.catalog.ts')).not.toContain('PHONE_VERIFICATION_REQUIRED');
+    expect(read('.env.example')).not.toContain('PHONE_VERIFICATION_REQUIRED');
   });
 });
 
@@ -86,13 +92,13 @@ describe('the website', () => {
   const app = readFileSync(join(process.cwd(), 'src/web/assets/app.js.ts'), 'utf8');
 
   it('takes a new account straight into the app', () => {
-    expect(app).not.toContain('if (signup) return renderVerifyPhone(');
+    expect(app).not.toContain('renderVerifyPhone');
+    expect(app).not.toContain('PHONE_UNVERIFIED');
   });
 
-  it('keeps the code screen for an account that is genuinely gated', () => {
-    // Existing accounts, and deployments that turn the gate back on, still
-    // need somewhere to enter a code.
-    expect(app).toContain("err.code === 'PHONE_UNVERIFIED'");
-    expect(app).toContain('function renderVerifyPhone');
+  it('does not ask for a WhatsApp number to sign up', () => {
+    // It was required, validated and then discarded - never stored - so all
+    // it did was refuse accounts over a mistyped or already-used number.
+    expect(app).not.toContain("payload.phoneNumber");
   });
 });

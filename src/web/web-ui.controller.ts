@@ -155,10 +155,25 @@ const APP_HTML = `<!doctype html>
 <meta name="robots" content="noindex, nofollow">
 <meta name="color-scheme" content="light dark">
 <title>Vakeel Saathi</title>
+<script>
+  // Before first paint, so a dark-theme advocate never sees the loading
+  // screen flash white. The module script below does the same again later.
+  try {
+    var t = localStorage.getItem('vs-theme');
+    if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+</script>
 <style>${APP_CSS}</style>
 </head>
 <body>
+<div id="boot" role="status" aria-label="Loading Vakeel Saathi">
+  <div class="boot-mark">VS</div>
+  <div class="boot-name">Vakeel Saathi</div>
+  <div class="boot-bar"><span></span></div>
+</div>
 <noscript>
+  <style>#boot { display:none; }</style>
   <div style="max-width:520px;margin:80px auto;padding:24px;font-family:sans-serif;line-height:1.6">
     <h1 style="font-size:20px">JavaScript is required</h1>
     <p>Vakeel Saathi's web app needs JavaScript. You can also use the service entirely
