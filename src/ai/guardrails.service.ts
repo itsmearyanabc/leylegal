@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { RetrievedChunk } from '../database/types';
+import { ClassifiedIntent } from './intent.service';
 import { extractCitations, extractStatuteRefs } from './legal-patterns';
 
 export interface GuardrailReport {
@@ -50,7 +51,7 @@ export class GuardrailsService {
 
   constructor(private readonly corpus: CorpusRepository) {}
 
-  async verify(answer: string, retrieved: RetrievedChunk[]): Promise<GuardrailReport> {
+  async verify(answer: string, retrieved: RetrievedChunk[], intent?: ClassifiedIntent): Promise<GuardrailReport> {
     if (!answer.trim()) {
       return { text: answer, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null };
     }
@@ -90,8 +91,16 @@ export class GuardrailsService {
     }
 
     const removedStatuteRefs: string[] = [];
+    const askedStatute = intent?.actCode && intent?.sectionNumber
+      ? `${intent.actCode} ${intent.sectionNumber}`.toUpperCase()
+      : null;
+
     for (const check of statuteChecks) {
       if (!check.found) {
+        if (askedStatute && check.ref === askedStatute) {
+          // The advocate specifically asked for this provision, so repeating it is not a hallucination.
+          continue;
+        }
         removed.push(check.ref);
         removedStatuteRefs.push(check.ref);
       }

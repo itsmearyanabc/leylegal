@@ -290,15 +290,15 @@ export function extractStatuteRefs(text: string): string[] {
   // The suffix letter is adjacent to the digits for the same reason as in
   // extractSectionReference - otherwise "302 IPC" becomes section "302I".
   const forward =
-    /\b(?:u\/s|under\s+sections?|sections?|secs?|s)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s*(?:of\s+(?:the\s+)?)?\b(IPC|BNS|CrPC|BNSS|IEA|BSA)\b/gi;
+    /\b(?:u\/s|under\s+sections?|sections?|secs?|s|orders?|o|articles?|arts?)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s*(?:of\s+(?:the\s+)?)?\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
   // "IPC Section 302" / "IPC 302"
   const backward =
-    /\b(IPC|BNS|CrPC|BNSS|IEA|BSA)\b\s*(?:sections?|secs?|s)?\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/gi;
+    /\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b\s*(?:sections?|secs?|s|orders?|o|articles?|arts?)?\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/gi;
   // Bare "302 IPC" with no section keyword at all. Needed for the second and
   // later items in a list - "Sections 302 IPC and 498A IPC" carries the keyword
   // only once, so without this every provision after the first goes unverified.
   const bare =
-    /\b(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s+(?:of\s+(?:the\s+)?)?(IPC|BNS|CrPC|BNSS|IEA|BSA)\b/gi;
+    /\b(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s+(?:of\s+(?:the\s+)?)?(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
 
   let match: RegExpExecArray | null;
 
