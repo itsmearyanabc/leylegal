@@ -128,6 +128,32 @@ describe('spotting that a judgment was named', () => {
       ),
     ).toBeNull();
   });
+
+  it.each([
+    'give me summary of Rajesh Kumar Mittal vs State of Bihar in 100 words',
+    'summary of Rajesh Kumar Mittal vs State of Bihar',
+    'can you summarise Rajesh Kumar Mittal vs State of Bihar',
+    'Rajesh Kumar Mittal vs State of Bihar ka summary 100 words me do',
+    'Rajesh Kumar Mittal vs State of Bihar - short summary please',
+    'Rajesh Kumar Mittal vs State of Bihar summary (2017)',
+  ])('reads the parties out of a request for a summary: %p', (text) => {
+    // The petitioner came out as "give me summary of Rajesh Kumar Mittal",
+    // which scored under the bar and reported the case as not found.
+    expect(extractCaseName(text)).toEqual({
+      petitioner: 'Rajesh Kumar Mittal',
+      respondent: 'State of Bihar',
+    });
+  });
+
+  it('keeps the court behind a request for a summary', () => {
+    expect(
+      extractCaseName('summary of Rajesh Kumar Mittal vs State of Bihar in Patna High Court in 100 words'),
+    ).toMatchObject({
+      petitioner: 'Rajesh Kumar Mittal',
+      respondent: 'State of Bihar',
+      court: expect.stringContaining('Patna High Court'),
+    });
+  });
 });
 
 describe('scoring a title against the name that was asked for', () => {

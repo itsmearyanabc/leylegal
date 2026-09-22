@@ -38,7 +38,9 @@ function kanoonRow(over: Partial<PrecedentRow> = {}): PrecedentRow {
   } as PrecedentRow;
 }
 
-function build(over: { rows?: PrecedentRow[]; enrichMax?: number; header?: unknown } = {}) {
+function build(
+  over: { rows?: PrecedentRow[]; enrichMax?: number; header?: unknown; registry?: unknown } = {},
+) {
   const rows = over.rows ?? [kanoonRow()];
 
   const kanoon = {
@@ -61,7 +63,7 @@ function build(over: { rows?: PrecedentRow[]; enrichMax?: number; header?: unkno
     {} as never,
     kanoon as never,
     { get: () => 'kanoon', getNumber: (_k: string, d: number) => d } as never,
-    { isRouterMocked: true } as never,
+    (over.registry ?? { isRouterMocked: true }) as never,
     {
       KANOON_ENRICH_MAX: over.enrichMax ?? 5,
       PRECEDENT_MAX_RESULTS: 15,
@@ -370,5 +372,96 @@ describe('the documented search operators, and falling back from them', () => {
     await service.search(named('AIR 1973 SC 1461') as never);
 
     expect(kanoon.search.mock.calls[0][0]).toMatch(/^cite: AIR 1973 SC 1461/);
+  });
+});
+
+describe('"summary in 100 words"', () => {
+  /*
+   * Asked for and not delivered, three ways at once: the length never reached
+   * the summariser on the Kanoon path, the card cut whatever it wrote at 200
+   * characters, and the request itself was read as part of the case name.
+   */
+  const mittal = kanoonRow({
+    judgment_id: 'kanoon:500',
+    case_title: 'Rajesh Kumar Mittal vs State Of Bihar',
+    court_name: 'Patna High Court',
+  });
+  const header = {
+    caseNumber: 'CWJC No. 1/2020',
+    neutralCitation: null,
+    equivalentCitations: [],
+    bench: [],
+    extract:
+      'The petitioner challenges the order of the District Magistrate cancelling his arms licence. ' +
+      'The only ground stated is a pending criminal case in which he has since been acquitted. ' +
+      'The question is whether the licensing authority may rely on a charge that has ended in acquittal.',
+  };
+
+  function summariser(principle = 'The petitioner challenged the cancellation of his arms licence.') {
+    return {
+      isRouterMocked: false,
+      complete: jest
+        .fn()
+        .mockResolvedValue({ text: JSON.stringify({ principles: [{ n: 1, principle }] }) }),
+    };
+  }
+
+  function asked(text: string) {
+    return { ...intent(text), rawText: text, searchQuery: text };
+  }
+
+  it('finds the named case with the request wrapped around it', async () => {
+    const registry = summariser();
+    const { service, kanoon } = build({ rows: [mittal], header, registry });
+
+    const result = await service.search(
+      asked('give me summary of Rajesh Kumar Mittal vs State of Bihar in 100 words') as never,
+    );
+
+    expect(kanoon.search.mock.calls[0][0]).toBe('title: Rajesh Kumar Mittal State of Bihar');
+    expect(result.namedCase).toEqual({ name: 'Rajesh Kumar Mittal vs State of Bihar', found: true });
+  });
+
+  it('tells the summariser the length, and gives it room to write it', async () => {
+    const registry = summariser();
+    const { service } = build({ rows: [mittal], header, registry });
+
+    await service.search(asked('Rajesh Kumar Mittal vs State of Bihar summary 100 words me do') as never);
+
+    const call = registry.complete.mock.calls[0][0];
+    expect(call.system).toContain('about 100 words');
+    expect(call.maxTokens).toBeGreaterThanOrEqual(100 * 2);
+  });
+
+  it('writes one summary at that length, not a second one under it', async () => {
+    const registry = summariser();
+    const { service } = build({ rows: [mittal], header, registry });
+
+    const result = await service.search(
+      asked('summary of Rajesh Kumar Mittal vs State of Bihar in 100 words') as never,
+    );
+
+    expect(registry.complete).toHaveBeenCalledTimes(1);
+    expect(result.precedents[0].generated_principle).toContain('arms licence');
+  });
+
+  it('keeps both summaries on a named case when no length was asked for', async () => {
+    const registry = summariser();
+    const { service } = build({ rows: [mittal], header, registry });
+
+    await service.search(asked('Rajesh Kumar Mittal vs State of Bihar') as never);
+
+    expect(registry.complete).toHaveBeenCalledTimes(2);
+    expect(registry.complete.mock.calls[0][0].system).toContain('at most 80 words');
+  });
+
+  it('applies to every card of a topic search too', async () => {
+    const registry = summariser();
+    const { service, kanoon } = build({ rows: [mittal], header, registry });
+
+    await service.search(asked('judgments on cancellation of arms licence, summary in 150 words') as never);
+
+    expect(kanoon.search.mock.calls[0][0]).not.toContain('150');
+    expect(registry.complete.mock.calls[0][0].system).toContain('about 150 words');
   });
 });

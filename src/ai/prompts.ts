@@ -1,4 +1,5 @@
 import { RetrievedChunk, StatuteRow } from '../database/types';
+import { DEFAULT_SUMMARY_WORDS } from './summary-length';
 
 /**
  * Prompt templates.
@@ -251,17 +252,30 @@ ${languageInstruction(language)}`;
  * One call for the whole page rather than one per judgment: ten round trips on
  * the router model would cost more latency than the retrieval they describe.
  */
-export function buildPrincipleSummaryPrompt(): string {
+export function buildPrincipleSummaryPrompt(words?: number | null): string {
+  /*
+   * The length the advocate asked for, as a number parsed from their message -
+   * never the message itself. See ai/summary-length.ts.
+   *
+   * "Do not pad" is what keeps a requested length from becoming a licence to
+   * invent: a 900-character extract cannot honestly fill 300 words, and the
+   * shortfall is correct.
+   */
+  const length = words
+    ? `- The advocate asked for a summary of about ${words} words. Write close to ${words} words for each entry - this is their explicit request, so do not cut it short to be concise. Reach the length by covering more of what the extract says (the facts, the question in issue, the arguments, the reasoning, the outcome), never by padding or repeating. If an extract genuinely does not contain enough to reach ${words} words, stop at what it supports.`
+    : `- Two to four sentences, at most ${DEFAULT_SUMMARY_WORDS} words per entry.`;
+
   return `You summarise Indian judgments for practising advocates.
 
-You will be given numbered extracts. For each one, write the LEGAL PRINCIPLE: one or two lines stating what that extract actually says the court decided or held.
+You will be given numbered extracts. For each one, write a SUMMARY that tells the advocate what the case was: first what the dispute or proceeding was about, then the legal principle the court decided or held, as far as the extract states it.
 
 Absolute rules:
 - Use ONLY the extract given for that number. Never use anything you happen to know about the case, the parties or the court.
-- If the extract is only a title, a date, a judge's name, a case number or procedural boilerplate - anything that does not state what was decided - return exactly "NONE" for that number. This is the correct answer far more often than you expect, and guessing is the one thing that makes this feature dangerous.
+- If the extract does not say how the case was decided, describe only what it does say. Never guess an outcome or a principle.
+- If the extract is only a title, a date, a judge's name, a case number or procedural boilerplate - anything that says nothing about what the case was or what was decided - return exactly "NONE" for that number. This is the correct answer far more often than you expect, and guessing is the one thing that makes this feature dangerous.
 - Never name a section, a statute or another case unless that name appears in the extract.
-- No preamble, no "the court held that" padding, no hedging. State the principle.
-- Maximum 40 words per entry.
+- No preamble, no "this case concerns" or "the court held that" padding, no hedging. State it directly.
+${length}
 
 Reply with JSON only, no code fence:
 {"principles":[{"n":1,"principle":"..."},{"n":2,"principle":"NONE"}]}`;

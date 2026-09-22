@@ -200,7 +200,7 @@ describe('precedent formatting', () => {
         'DATE OF JUDGMENT',
         'BENCH',
         'EQUIVALENT CITATIONS',
-        'LEGAL PRINCIPLE',
+        'SUMMARY',
       ]) {
         expect(out).toContain(`${label}:`);
       }
@@ -271,7 +271,20 @@ describe('precedent formatting', () => {
         5,
         'q',
       );
-      expect(out).toContain('LEGAL PRINCIPLE: Bail cannot be refused solely because');
+      expect(out).toContain('SUMMARY: Bail cannot be refused solely because');
+    });
+
+    it('prints a model-written summary whole, at the length that was asked for', () => {
+      // It was cut at 200 characters, so "summary in 100 words" arrived as
+      // about thirty of them.
+      const hundredWords = Array.from({ length: 100 }, (_, i) => `word${i}`).join(' ') + '.';
+      const out = formatPrecedentPage(
+        [row({ ratio_decidendi: null, headnote: null, best_excerpt: '', generated_principle: hundredWords })],
+        0,
+        5,
+        'q',
+      );
+      expect(out).toContain(`SUMMARY: ${hundredWords}`);
     });
 
     it("prefers the court's own words over anything written for it", () => {
@@ -281,7 +294,7 @@ describe('precedent formatting', () => {
         5,
         'q',
       );
-      expect(out).toContain('LEGAL PRINCIPLE: Bail may be granted where the accused has no antecedents.');
+      expect(out).toContain('SUMMARY: Bail may be granted where the accused has no antecedents.');
       expect(out).not.toContain('must not win');
     });
 
@@ -292,7 +305,7 @@ describe('precedent formatting', () => {
         5,
         'q',
       );
-      expect(out).toContain('LEGAL PRINCIPLE: Not available');
+      expect(out).toContain('SUMMARY: Not available');
     });
 
     it('closes the page with the caveat, in italics', () => {
@@ -402,7 +415,7 @@ describe('when the summariser says the extract states no principle', () => {
   /*
    * Live output, and the fallback was backwards:
    *
-   *   LEGAL PRINCIPLE: Rule 3 of Order 32 of the CPC , 1908. Sub Rule (5) of
+   *   SUMMARY: Rule 3 of Order 32 of the CPC , 1908. Sub Rule (5) of
    *   Rule 3 of Order 32 of the CPC , 1908 lays Rule (1) of Rule 3 of Order 32
    *   of the CPC , 1908. 18.
    *
@@ -433,7 +446,7 @@ describe('when the summariser says the extract states no principle', () => {
       'q',
     );
 
-    expect(out).toContain('LEGAL PRINCIPLE: Not available');
+    expect(out).toContain('SUMMARY: Not available');
     expect(out).not.toContain('Sub Rule (5)');
   });
 
@@ -480,7 +493,7 @@ describe('when the summariser says the extract states no principle', () => {
 
 describe('the summary under a judgment asked for by name', () => {
   /*
-   * The LEGAL PRINCIPLE line answers "what did this decide" in forty words,
+   * The SUMMARY line answers "what did this decide" in forty words,
    * which is what a ten-result page has room for. Somebody who named one
    * judgment is not scanning a list - they want what the first page of it would
    * have told them.
@@ -501,9 +514,9 @@ describe('the summary under a judgment asked for by name', () => {
       'q',
     );
 
-    expect(out).toContain('LEGAL PRINCIPLE: A quashing petition');
-    expect(out).toContain('SUMMARY: The petitioner sought quashing');
-    expect(out.indexOf('LEGAL PRINCIPLE')).toBeLessThan(out.indexOf('SUMMARY'));
+    expect(out).toContain('SUMMARY: A quashing petition');
+    expect(out).toContain('FULL SUMMARY: The petitioner sought quashing');
+    expect(out.indexOf('SUMMARY: A quashing')).toBeLessThan(out.indexOf('FULL SUMMARY:'));
   });
 
   it('is absent from an ordinary topic search', () => {
@@ -511,6 +524,6 @@ describe('the summary under a judgment asked for by name', () => {
     // list they are meant to describe.
     const out = formatPrecedentPage([row({ generated_summary: null })], 0, 5, 'bail');
 
-    expect(out).not.toContain('SUMMARY:');
+    expect(out).not.toContain('FULL SUMMARY:');
   });
 });

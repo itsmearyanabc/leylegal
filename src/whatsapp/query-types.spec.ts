@@ -426,7 +426,7 @@ describe('case law', () => {
       'DATE OF JUDGMENT',
       'BENCH',
       'EQUIVALENT CITATIONS',
-      'LEGAL PRINCIPLE',
+      'SUMMARY',
     ]) {
       expect(page).toContain(`${label}:`);
     }

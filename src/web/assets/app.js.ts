@@ -1190,7 +1190,7 @@ function renderPrecedentCard(item) {
   card.appendChild(rows);
 
   const principle = el('div', 'holding');
-  principle.appendChild(el('b', null, 'LEGAL PRINCIPLE: '));
+  principle.appendChild(el('b', null, 'SUMMARY: '));
   principle.appendChild(document.createTextNode(value(item.legalPrinciple)));
   card.appendChild(principle);
 

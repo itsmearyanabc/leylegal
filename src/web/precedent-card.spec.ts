@@ -64,7 +64,7 @@ describe('the judgment the browser receives', () => {
     expect(card).toContain(`RESPONDENT: ${item.respondent}`);
     expect(card).toContain(`BENCH: ${item.bench}`);
     expect(card).toContain(`EQUIVALENT CITATIONS: ${item.equivalentCitations.join('; ')}`);
-    expect(card).toContain(`LEGAL PRINCIPLE: ${item.legalPrinciple}`);
+    expect(card).toContain(`SUMMARY: ${item.legalPrinciple}`);
   });
 
   it('never repeats the neutral citation as an equivalent', () => {

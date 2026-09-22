@@ -15,6 +15,7 @@ import { ClassifiedIntent } from './intent.service';
 import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName } from './case-name';
 import { expandQuery, extractCitations } from './legal-patterns';
 import { buildCaseSummaryPrompt, buildPrincipleSummaryPrompt } from './prompts';
+import { DEFAULT_SUMMARY_WORDS, requestedWordCount, withoutLengthRequest } from './summary-length';
 import { parseJsonLoose } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
 
@@ -109,10 +110,12 @@ function display(name: CaseName): string {
  */
 export function kanoonQueries(intent: ClassifiedIntent): string[] {
   const court = courtFilter(intent.rawText);
+  // "in 100 words" is about the reply. Left in, Kanoon scores judgments on it.
+  const searchQuery = withoutLengthRequest(intent.searchQuery);
 
   // 1. A citation the advocate pasted. Unique on its own, so no court scope.
   const citation = extractCitations(intent.rawText)[0];
-  if (citation) return unique([`cite: ${citation}`, intent.searchQuery]);
+  if (citation) return unique([`cite: ${citation}`, searchQuery]);
 
   // 2. A named case.
   const name = extractCaseName(intent.rawText);
@@ -129,10 +132,10 @@ export function kanoonQueries(intent: ClassifiedIntent): string[] {
   // 3. A provision, kept to the court the advocate named.
   const provision = provisionPhrase(intent);
   if (provision) {
-    return unique([court ? `${provision} doctypes:${court}` : provision, intent.searchQuery]);
+    return unique([court ? `${provision} doctypes:${court}` : provision, searchQuery]);
   }
 
-  return [intent.searchQuery];
+  return [searchQuery];
 }
 
 /** The first attempt - what Kanoon is asked before any fallback. */
@@ -299,6 +302,8 @@ export class PrecedentsService {
     // so it is preferred when available. `auto` falls back to local on failure
     // rather than leaving the advocate with nothing.
     const useKanoon = mode === 'kanoon' || (mode === 'auto' && this.kanoon.isConfigured);
+    // "Summary in 100 words" - read from what was typed, not the rewrite.
+    const words = requestedWordCount(intent.rawText);
 
     if (useKanoon) {
       try {
@@ -307,9 +312,11 @@ export class PrecedentsService {
         // Promote first, enrich second. The other way round pays for documents
         // the advocate will never see and leaves the top of the page empty.
         const ordered = prioritiseHomeCourt(precedents, homeState);
-        const enriched = await this.withPrinciples(await this.withHeaders(ordered));
+        const enriched = await this.withPrinciples(await this.withHeaders(ordered), words);
         return {
-          precedents: namedCase?.found ? await this.withSummary(enriched) : enriched,
+          // With a length asked for, the SUMMARY line already is the summary at
+          // that length, and a second one under it would say the same again.
+          precedents: namedCase?.found && !words ? await this.withSummary(enriched) : enriched,
           namedCase,
           totalMatches: precedents[0]?.total_matches ?? precedents.length,
           // Kanoon runs its own relevance ranking; the local dense/lexical
@@ -331,7 +338,7 @@ export class PrecedentsService {
       }
     }
 
-    return this.searchLocal(intent, started, homeState);
+    return this.searchLocal(intent, started, homeState, words);
   }
 
   /**
@@ -548,8 +555,9 @@ export class PrecedentsService {
     intent: ClassifiedIntent,
     started: number,
     homeState?: string | null,
+    words?: number | null,
   ): Promise<PrecedentSearchResult> {
-    const expanded = expandQuery(intent.searchQuery);
+    const expanded = expandQuery(withoutLengthRequest(intent.searchQuery));
     const embedding = await this.embeddings.embedQuery(expanded);
 
     const precedents = await this.corpus.searchPrecedents({
@@ -577,7 +585,7 @@ export class PrecedentsService {
     return {
       // Ordered here too, so both sources hand back a list in the order it will
       // be read and neither caller has to remember to do it.
-      precedents: await this.withPrinciples(prioritiseHomeCourt(named.precedents, homeState)),
+      precedents: await this.withPrinciples(prioritiseHomeCourt(named.precedents, homeState), words),
       namedCase: named.namedCase,
       totalMatches: precedents[0]?.total_matches ?? precedents.length,
       lexicalOnly: !embedding,
@@ -664,7 +672,9 @@ export class PrecedentsService {
   }
 
   /**
-   * Fill in the LEGAL PRINCIPLE line for rows that have no authored one.
+   * Fill in the SUMMARY line (formerly LEGAL PRINCIPLE) for rows that have no
+   * authored one: what the case was about, then what it decided - at the
+   * length the advocate asked for, when they asked for one.
    *
    * ## Why this exists
    *
@@ -689,7 +699,7 @@ export class PrecedentsService {
    * nothing a model can add to the court's own words, and it would be a chance
    * to contradict them.
    */
-  private async withPrinciples(rows: PrecedentRow[]): Promise<PrecedentRow[]> {
+  private async withPrinciples(rows: PrecedentRow[], words?: number | null): Promise<PrecedentRow[]> {
     if (rows.length === 0 || this.registry.isRouterMocked) return rows;
 
     const needed = rows
@@ -725,12 +735,16 @@ export class PrecedentsService {
     }
 
     try {
+      // Facts and a holding need more of the judgment than a holding alone
+      // did, and a requested length more again. The Kanoon extract stops at
+      // 2,000 characters, so that is the ceiling either way.
+      const extractChars = words ? 2_000 : 1_500;
       const extracts = needed
         .map(({ row }, n) =>
           [
             `${n + 1}. ${row.case_title}`,
             row.court_name ? `Court: ${row.court_name}` : '',
-            `Extract: ${(row.best_excerpt || '').replace(/\s+/g, ' ').slice(0, 900)}`,
+            `Extract: ${(row.best_excerpt || '').replace(/\s+/g, ' ').slice(0, extractChars)}`,
           ]
             .filter(Boolean)
             .join(NEWLINE),
@@ -739,10 +753,13 @@ export class PrecedentsService {
 
       const result = await this.registry.complete({
         task: 'router',
-        system: buildPrincipleSummaryPrompt(),
+        system: buildPrincipleSummaryPrompt(words),
         messages: [{ role: 'user', content: extracts }],
         json: true,
-        maxTokens: 900,
+        // Sized to what was asked for. A fixed 900 held ten forty-word entries
+        // and truncated the JSON - losing every entry, not just the last - the
+        // moment somebody asked for a hundred.
+        maxTokens: summaryTokenBudget(needed.length, words),
       });
 
       const parsed = parseJsonLoose<{ principles?: { n?: number; principle?: string }[] }>(result.text);
@@ -959,7 +976,20 @@ export function synopsis(p: PrecedentRow, limit = 260): string {
 }
 
 /**
- * The line under LEGAL PRINCIPLE, or nothing at all.
+ * Output tokens for one summariser call: the words asked for, per entry, with
+ * room for the JSON around them. About 1.5 tokens a word in English; 2 leaves
+ * slack for names and Hinglish.
+ */
+export function summaryTokenBudget(entries: number, words?: number | null): number {
+  const perEntry = (words ?? DEFAULT_SUMMARY_WORDS) * 2;
+  return Math.min(8_000, 300 + entries * perEntry);
+}
+
+/** About 350 words: well past any length the prompt asks for. */
+const GENERATED_SUMMARY_CEILING = 2_400;
+
+/**
+ * The line under SUMMARY, or nothing at all.
  *
  * ## Why this can return null
  *
@@ -988,8 +1018,13 @@ export function legalPrinciple(p: PrecedentRow, limit = 200): string | null {
   // Written by the model from this row's own extract, and only where the row
   // states no principle of its own - see PrecedentsService.withPrinciples().
   // Ranked below the court's words and above our own salvage attempt.
+  //
+  // Not held to `limit`. That cut every one at 200 characters - about thirty
+  // words - so a summary written to the length the advocate asked for arrived
+  // with its second half missing. The model was given the length; the ceiling
+  // here only guards against one that ignored it.
   const generated = (p.generated_principle || '').replace(/\s+/g, ' ').trim();
-  if (generated) return stripEllipsis(synopsis({ ...p, best_excerpt: generated }, limit));
+  if (generated) return stripEllipsis(synopsis({ ...p, best_excerpt: generated }, GENERATED_SUMMARY_CEILING));
 
   // The summariser read the extract and said it states no principle. Printing
   // that extract anyway - which is what the salvage below does - shows the
@@ -1181,11 +1216,11 @@ export function formatPrecedentPage(
       // "Not available" rather than the document's own header standing in for a
       // holding. Every word of that header is true and it is not what the case
       // decided, which is the one thing this line claims to be.
-      line('LEGAL PRINCIPLE', principle),
+      line('SUMMARY', principle),
       // Only ever present on a judgment asked for by name - see withSummary.
-      // Below the principle rather than above it, because the principle is the
-      // line an advocate reads first and the summary is what they read next.
-      ...(p.generated_summary ? ['', `SUMMARY: ${p.generated_summary}`] : []),
+      // Below the short summary rather than above it, because that is the line
+      // an advocate reads first and this is what they read next.
+      ...(p.generated_summary ? ['', `FULL SUMMARY: ${p.generated_summary}`] : []),
     ].join(NEWLINE);
   });
 
