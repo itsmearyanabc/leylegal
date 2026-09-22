@@ -363,6 +363,18 @@ button { cursor:pointer; }
 .send-btn.stop { animation:fade-in .15s ease both; }
 .send-btn.stop:not(:disabled):hover { background:var(--accent-hover); }
 
+/* Asking for the state, on a new conversation, when there is none. */
+.state-nudge {
+  display:block; width:100%; margin-top:14px; text-align:left; cursor:pointer;
+  padding:13px 15px; border-radius:var(--radius); border:1px dashed var(--olive);
+  background:var(--olive-light); color:var(--text);
+}
+.state-nudge b { display:block; font-size:13.5px; margin-bottom:3px; }
+.state-nudge span { font-size:13px; color:var(--muted); }
+.state-nudge:hover { border-style:solid; }
+.field .optional { font-weight:500; color:var(--dim); }
+.profile-form { margin-bottom:12px; }
+
 /* Editing the latest question in place. */
 .edit-btn { display:inline-flex; align-items:center; gap:5px; }
 .edit-box textarea {

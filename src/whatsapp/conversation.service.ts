@@ -1226,6 +1226,7 @@ export class ConversationService {
       lexicalOnly: result.lexicalOnly,
       source: result.source,
       namedCase: result.namedCase,
+      grouping: result.grouping,
     });
     const delivery = await this.api.sendText(job.from, body);
 
@@ -1271,6 +1272,7 @@ export class ConversationService {
             precedentLexicalOnly: result.lexicalOnly,
             precedentSource: result.source,
             precedentNamedCase: result.namedCase,
+            precedentGrouping: result.grouping,
           }
         : CLEARED_PRECEDENTS;
 
@@ -1337,6 +1339,7 @@ export class ConversationService {
         lexicalOnly: context.precedentLexicalOnly,
         source: context.precedentSource,
         namedCase: context.precedentNamedCase,
+        grouping: context.precedentGrouping,
       }),
     );
 

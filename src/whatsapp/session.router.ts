@@ -87,6 +87,8 @@ export interface SessionContext {
    * and reads like a topic search that worked.
    */
   precedentNamedCase?: { name: string; found: boolean };
+  /** Carried so later pages say the list is ordered by court, as the first did. */
+  precedentGrouping?: { homeCourt: string | null };
 }
 
 export interface SessionUser {
@@ -155,6 +157,7 @@ export const CLEARED_PRECEDENTS: Partial<SessionContext> = {
   precedentLexicalOnly: undefined,
   precedentSource: undefined,
   precedentNamedCase: undefined,
+  precedentGrouping: undefined,
 };
 
 /** "0" always means "take me back to the menu", from every state. */

@@ -86,7 +86,7 @@ const LEAD_IN =
  * middle of a name is left alone.
  */
 const SUMMARY_LEAD_IN =
-  /^(?:(?:please|pls|plz|kindly|can|could|would|you|give|send|share|provide|show|tell|write|get|me|us|a|an|the|short|brief|detailed|quick|full|complete)\s+)*(?:summary|summarise|summarize|synopsis|gist)\s+(?:(?:of|for|on|about|regarding)\s+)?/i;
+  /^(?:(?:please|pls|plz|kindly|can|could|would|you|what|whats|what's|is|give|send|share|provide|show|tell|write|get|me|us|a|an|the|short|brief|detailed|quick|full|complete)\s+)*(?:summary|summarise|summarize|synopsis|gist)\s+(?:(?:of|for|on|about|regarding)\s+)?/i;
 
 const SUMMARY_TAIL =
   /[\s,.;:-]+(?:(?:ka|ki|ke|kaa|with|and|give|me|a|short|brief|detailed|full)\s+)*(?:summary|summarise|summarize|synopsis|gist)(?:\s+(?:do|de|dedo|dijiye|batao|bataiye|chahiye|karo|kijiye|likho|please|pls|plz))*[\s.?!]*$/i;

@@ -30,9 +30,9 @@ Return ONLY a JSON object with exactly these keys:
 Intent guidance:
 - CASE_STATUS: asking about the status, next hearing date, or details of a specific case, usually with a CNR or case number.
 - SECTION_LOOKUP: asking what a statutory provision says, its punishment, or whether it is bailable/cognizable. This includes Orders and Rules of the Civil Procedure Code - "Order 32 CPC", "O.37 R.3" - which are provisions, not judgments. The word "order" there does not mean a court order.
-- PRECEDENT_SEARCH: looking for case law, judgments, rulings or precedents on a legal question.
+- PRECEDENT_SEARCH: looking for case law, judgments, rulings or precedents on a legal question - or asking about one specific judgment by name: its summary, facts, holding or ratio (e.g. "summary of Vishaka vs State of Rajasthan", "Arnesh Kumar v State of Bihar ka summary 100 words me").
 - DRAFTING_HELP: asking for help drafting a notice, petition, application or affidavit.
-- GENERAL_LEGAL: a legal question that needs no corpus lookup, or a follow-up question (e.g. "summary of the case", "details of case") that can be answered from the conversational context.
+- GENERAL_LEGAL: a legal question that needs no corpus lookup, or a follow-up that refers back to an earlier answer without naming a case (e.g. "summary of the case", "details of case") and can be answered from the conversational context. A summary of a case named in the message itself is PRECEDENT_SEARCH.
 - SMALL_TALK: greetings, thanks, acknowledgements.
 - MENU_NAVIGATION: "menu", "help", "start", "options".
 - UNSUPPORTED: not a legal query, or outside Indian law.

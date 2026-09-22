@@ -224,6 +224,12 @@ export interface PrecedentSearchResult {
    * neither.
    */
   namedCase?: { name: string; found: boolean };
+  /**
+   * Set when the list is arranged by court - the advocate's High Court, then
+   * the Supreme Court, then the rest, newest first within each. Absent for a
+   * named case, which is one judgment wherever it was decided.
+   */
+  grouping?: { homeCourt: string | null };
   latencyMs: number;
 }
 
@@ -307,17 +313,35 @@ export class PrecedentsService {
 
     if (useKanoon) {
       try {
-        const found = await this.searchKanoon(intent);
+        /*
+         * The advocate's own High Court and the Supreme Court are searched on
+         * their own, alongside the general search, not just picked out of it.
+         *
+         * Picking them out was all this did, and a general search returns ten
+         * judgments from anywhere in the country - often none from the one
+         * court whose decisions bind this advocate. A search restricted to that
+         * court finds them when they exist. Three Kanoon calls rather than
+         * one, in parallel so it costs no time, and each is cached.
+         */
+        const scoped = priorityQueries(intent, homeState);
+        const [found, homeRows, supremeRows] = await Promise.all([
+          this.searchKanoon(intent),
+          scoped?.home ? this.searchKanoonQuietly(scoped.home) : [],
+          scoped?.supreme ? this.searchKanoonQuietly(scoped.supreme) : [],
+        ]);
         const { precedents, namedCase } = this.forNamedCase(intent.rawText, found);
         // Promote first, enrich second. The other way round pays for documents
         // the advocate will never see and leaves the top of the page empty.
-        const ordered = prioritiseHomeCourt(precedents, homeState);
+        const ordered = scoped
+          ? arrangeByCourt({ home: homeRows, supreme: supremeRows, general: precedents }, homeState, this.maxResults)
+          : prioritiseHomeCourt(precedents, homeState);
         const enriched = await this.withPrinciples(await this.withHeaders(ordered), words);
         return {
           // With a length asked for, the SUMMARY line already is the summary at
           // that length, and a second one under it would say the same again.
           precedents: namedCase?.found && !words ? await this.withSummary(enriched) : enriched,
           namedCase,
+          grouping: scoped ? { homeCourt: homeCourtName(homeState) } : undefined,
           totalMatches: precedents[0]?.total_matches ?? precedents.length,
           // Kanoon runs its own relevance ranking; the local dense/lexical
           // distinction does not apply, so this is never a degraded state.
@@ -395,6 +419,20 @@ export class PrecedentsService {
 
     if (failures === attempts.length) throw lastError;
     return nearest;
+  }
+
+  /**
+   * One court-restricted search, for the home-court and Supreme Court passes.
+   * Those only add to the answer, so a failure costs them and nothing else:
+   * the general search still stands on its own.
+   */
+  private async searchKanoonQuietly(query: string): Promise<PrecedentRow[]> {
+    try {
+      return await this.kanoon.search(query, this.maxResults);
+    } catch (err) {
+      this.logger.warn({ err, query }, 'Court-restricted Kanoon search failed - the general results stand');
+      return [];
+    }
   }
 
   /**
@@ -582,11 +620,17 @@ export class PrecedentsService {
 
     const named = this.forNamedCase(intent.rawText, precedents);
 
+    // Ordered here too, so both sources hand back a list in the order it will
+    // be read and neither caller has to remember to do it. The corpus is one
+    // search, so the courts are arranged from what it returned.
+    const ordered = named.namedCase
+      ? prioritiseHomeCourt(named.precedents, homeState)
+      : arrangeByCourt({ home: [], supreme: [], general: named.precedents }, homeState, named.precedents.length);
+
     return {
-      // Ordered here too, so both sources hand back a list in the order it will
-      // be read and neither caller has to remember to do it.
-      precedents: await this.withPrinciples(prioritiseHomeCourt(named.precedents, homeState), words),
+      precedents: await this.withPrinciples(ordered, words),
       namedCase: named.namedCase,
+      grouping: named.namedCase ? undefined : { homeCourt: homeCourtName(homeState) },
       totalMatches: precedents[0]?.total_matches ?? precedents.length,
       lexicalOnly: !embedding,
       source: 'local',
@@ -872,12 +916,14 @@ export function splitParties(title: string): { petitioner: string | null; respon
  * likely to notice.
  */
 const HIGH_COURT_BY_STATE: Record<string, string> = {
+  'andaman and nicobar islands': 'calcutta high court',
   'andhra pradesh': 'andhra pradesh high court',
   'arunachal pradesh': 'gauhati high court',
   assam: 'gauhati high court',
   bihar: 'patna high court',
   chandigarh: 'punjab & haryana high court',
   chhattisgarh: 'chhattisgarh high court',
+  'dadra and nagar haveli and daman and diu': 'bombay high court',
   delhi: 'delhi high court',
   goa: 'bombay high court',
   gujarat: 'gujarat high court',
@@ -888,6 +934,7 @@ const HIGH_COURT_BY_STATE: Record<string, string> = {
   karnataka: 'karnataka high court',
   kerala: 'kerala high court',
   ladakh: 'jammu & kashmir high court',
+  lakshadweep: 'kerala high court',
   'madhya pradesh': 'madhya pradesh high court',
   maharashtra: 'bombay high court',
   manipur: 'manipur high court',
@@ -942,6 +989,144 @@ export function prioritiseHomeCourt(
   }
 
   return [...promoted, ...rest];
+}
+
+/** "Karnataka High Court", for saying so on the page. */
+export function homeCourtName(state: string | null | undefined): string | null {
+  const court = homeHighCourt(state);
+  return court ? court.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : null;
+}
+
+/**
+ * Kanoon's name for the advocate's High Court - "karnataka", "punjab",
+ * "allahabad,lucknow" - or null for a court Kanoon does not document.
+ */
+export function homeCourtSlug(state: string | null | undefined): string | null {
+  const court = homeHighCourt(state);
+  return court ? courtFilter(court) : null;
+}
+
+/**
+ * The extra searches a topic question gets: the advocate's High Court, and
+ * the Supreme Court.
+ *
+ * None for a pasted citation or a named case - that is one judgment, wherever
+ * it was decided. None when the advocate named a court themselves: "Patna
+ * High Court judgments on bail" asked for Patna, and adding Karnataka to it
+ * would be answering a different question.
+ */
+export function priorityQueries(
+  intent: ClassifiedIntent,
+  state: string | null | undefined,
+): { home: string | null; supreme: string } | null {
+  if (extractCitations(intent.rawText)[0] || extractCaseName(intent.rawText)) return null;
+  if (courtFilter(intent.rawText)) return null;
+
+  const base = provisionPhrase(intent) ?? withoutLengthRequest(intent.searchQuery).trim();
+  if (!base) return null;
+
+  const slug = homeCourtSlug(state);
+  return {
+    home: slug ? `${base} doctypes:${slug}` : null,
+    supreme: `${base} doctypes:supremecourt`,
+  };
+}
+
+/**
+ * The order an advocate reads authority in: their own High Court first, then
+ * the Supreme Court, then everything else - newest first within each, by the
+ * DATE OF JUDGMENT on the card.
+ *
+ * Their High Court binds them and the Supreme Court binds everyone; the rest
+ * is persuasive. A single newest-first list mixes the three and leaves the
+ * advocate to sort them.
+ *
+ * ## Why each group has a share rather than the whole page
+ *
+ * Ten results, and the home court alone can fill them. Four from it, three
+ * from the Supreme Court and three from elsewhere is the default split, and
+ * any share a group cannot fill passes to the others in the same order - so a
+ * court with nothing on the question costs no space, and a page is never
+ * short while anything is left to show.
+ *
+ * A judgment found by more than one search appears once, in its highest group.
+ */
+export function arrangeByCourt(
+  sources: { home: PrecedentRow[]; supreme: PrecedentRow[]; general: PrecedentRow[] },
+  state: string | null | undefined,
+  max: number,
+): PrecedentRow[] {
+  const homeName = homeHighCourt(state);
+  const homeSlug = homeCourtSlug(state);
+
+  const isHome = (row: PrecedentRow): boolean => {
+    const court = (row.court_name ?? '').toLowerCase();
+    if (!court || !homeName) return false;
+    // Kanoon spells some courts its own way - "Chattisgarh", "Punjab-Haryana" -
+    // so the court's search slug is compared as well as its name.
+    return court.includes(homeName) || (homeSlug !== null && courtFilter(court) === homeSlug);
+  };
+  const isSupreme = (row: PrecedentRow): boolean => /\bsupreme court\b/i.test(row.court_name ?? '');
+
+  const home: PrecedentRow[] = [];
+  const supreme: PrecedentRow[] = [];
+  const rest: PrecedentRow[] = [];
+  const seen = new Set<string>();
+
+  const place = (row: PrecedentRow, group: PrecedentRow[]): void => {
+    if (seen.has(row.judgment_id)) return;
+    seen.add(row.judgment_id);
+    group.push(row);
+  };
+
+  // Every judgment goes where its own court puts it, whichever search found
+  // it. The court-restricted searches are trusted only for a row that names no
+  // court - a scope that leaks would otherwise put a stranger's judgment first.
+  const sort = (row: PrecedentRow, scope: PrecedentRow[] | null): PrecedentRow[] =>
+    isHome(row) ? home : isSupreme(row) ? supreme : !row.court_name && scope ? scope : rest;
+  for (const row of sources.home) place(row, sort(row, home));
+  for (const row of sources.supreme) place(row, sort(row, supreme));
+  for (const row of sources.general) place(row, sort(row, null));
+
+  const groups = [home, supreme, rest].map(byJudgmentDate);
+  const shares = [Math.ceil(max * 0.4), Math.ceil(max * 0.3), max];
+  const taken = groups.map((group, i) => Math.min(group.length, shares[i]));
+
+  // Hand what a group could not use to the others, in order.
+  let spare = max - taken.reduce((sum, n) => sum + n, 0);
+  for (let i = 0; i < groups.length && spare > 0; i++) {
+    const more = Math.min(groups[i].length - taken[i], spare);
+    if (more > 0) {
+      taken[i] += more;
+      spare -= more;
+    }
+  }
+
+  // The total can exceed max only through the rest group's share, which is
+  // bounded by what is left after the first two.
+  const rows = groups.flatMap((group, i) => group.slice(0, taken[i]));
+  return rows.slice(0, max);
+}
+
+/**
+ * How the list is ordered, in words - so the advocate knows the first card is
+ * first because of its court, and not because it is the newest.
+ */
+export function orderingNote(grouping: { homeCourt: string | null } | undefined): string {
+  if (!grouping) return 'newest first';
+  return grouping.homeCourt
+    ? `${grouping.homeCourt} first, then the Supreme Court, then other courts — newest first within each`
+    : 'Supreme Court first, then other courts — newest first within each';
+}
+
+/** Newest first by date of judgment; undated last. A copy, never in place. */
+function byJudgmentDate(rows: PrecedentRow[]): PrecedentRow[] {
+  const time = (row: PrecedentRow): number => {
+    if (!row.judgment_date) return Number.NEGATIVE_INFINITY;
+    const at = new Date(row.judgment_date).getTime();
+    return Number.isNaN(at) ? Number.NEGATIVE_INFINITY : at;
+  };
+  return [...rows].sort((a, b) => time(b) - time(a));
 }
 
 function year(date: Date | null): string {
@@ -1085,6 +1270,7 @@ export function formatPrecedentPage(
     lexicalOnly?: boolean;
     source?: 'local' | 'kanoon';
     namedCase?: { name: string; found: boolean };
+    grouping?: { homeCourt: string | null };
   } = {},
 ): string {
   if (all.length === 0) {
@@ -1137,7 +1323,7 @@ export function formatPrecedentPage(
             `*Case law — ${all.length} precedent${all.length === 1 ? '' : 's'}*`,
             `_${query}_`,
             '',
-            `Showing ${offset + 1}–${shownTo} of ${all.length}, newest first.`,
+            `Showing ${offset + 1}–${shownTo} of ${all.length}, ${orderingNote(opts.grouping)}.`,
           ];
 
   if (opts.lexicalOnly) {

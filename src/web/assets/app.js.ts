@@ -289,6 +289,7 @@ function renderAuth() {
         field('email', 'Email', 'email', 'you@example.com') +
         field('password', 'Password', 'password',
               signup ? 'At least ' + state.config.passwordMinLength + ' characters' : '') +
+        (signup ? practiceFields('f', null, null, true) : '') +
         '<button class="btn block" type="submit">' +
           (signup ? 'Create account' : 'Sign in') +
         '</button>' +
@@ -329,6 +330,8 @@ function renderAuth() {
       };
       if (signup) {
         payload.fullName = $('#f-fullName').value.trim();
+        if ($('#f-state')) payload.state = $('#f-state').value;
+        if ($('#f-city')) payload.city = $('#f-city').value.trim();
       }
 
       await post(signup ? '/api/auth/signup' : '/api/auth/login', payload);
@@ -366,6 +369,34 @@ function field(name, label, type, hint) {
     (type === 'tel' ? 'inputmode="numeric" ' : '') +
     'required>' +
     (hint ? '<div class="hint">' + esc(hint) + '</div>' : '') + '</div>';
+}
+
+/**
+ * Where the advocate practises: a state from the list, and a city.
+ *
+ * The state is what puts their own High Court's judgments first in a case-law
+ * search, so it is a list rather than a text box - a typed "Karnatka" names no
+ * court. Asked at signup and editable on the profile screen, with the same
+ * markup, so the two cannot drift. Left out entirely if the list did not load,
+ * rather than shown as a required field nobody can fill.
+ */
+function practiceFields(prefix, currentState, currentCity, required) {
+  const states = (state.config && state.config.states) || [];
+  if (!states.length) return '';
+
+  const current = (currentState || '').toLowerCase();
+  const options = states.map((name) =>
+    '<option value="' + esc(name) + '"' + (name.toLowerCase() === current ? ' selected' : '') + '>' +
+      esc(name) + '</option>').join('');
+
+  return '<div class="field"><label for="' + prefix + '-state">State where you practise</label>' +
+      '<select id="' + prefix + '-state"' + (required ? ' required' : '') + '>' +
+        '<option value="">' + (required ? 'Choose your state' : 'Not set') + '</option>' + options +
+      '</select>' +
+      '<div class="hint">Judgments of your High Court are shown first, then the Supreme Court.</div></div>' +
+    '<div class="field"><label for="' + prefix + '-city">City <span class="optional">(optional)</span></label>' +
+      '<input id="' + prefix + '-city" type="text" autocomplete="address-level2" maxlength="80" ' +
+             'value="' + esc(currentCity || '') + '"></div>';
 }
 
 function brandMarkup() {
@@ -1140,6 +1171,18 @@ function emptyState() {
   }
 
   wrap.appendChild(suggestions);
+
+  // Without a state there is no home court to put first. Asked here, where a
+  // new conversation starts, rather than by blocking anything.
+  if (state.user && !state.user.state && state.config && (state.config.states || []).length) {
+    const nudge = el('button', 'state-nudge');
+    nudge.appendChild(el('b', null, 'Where do you practise?'));
+    nudge.appendChild(el('span', null,
+      'Add your state to see your High Court’s judgments first, then the Supreme Court’s.'));
+    nudge.onclick = openAccount;
+    wrap.appendChild(nudge);
+  }
+
   return wrap;
 }
 
@@ -1334,7 +1377,8 @@ function renderPrecedents(data, message) {
   const heading = el('div');
   heading.style.cssText = 'margin-bottom:13px;font-size:13.5px;color:var(--muted)';
   heading.textContent =
-    data.items.length + ' of ' + data.totalMatches + ' matching judgments for "' + data.query + '"';
+    data.items.length + ' of ' + data.totalMatches + ' matching judgments for "' + data.query + '"' +
+    (data.ordering ? ' · ' + data.ordering : '');
   wrap.appendChild(heading);
 
   // Both of these change how much weight the results deserve, so they are shown
@@ -1415,6 +1459,14 @@ function renderPrecedentCard(item) {
   principle.appendChild(el('b', null, 'SUMMARY: '));
   principle.appendChild(document.createTextNode(value(item.legalPrinciple)));
   card.appendChild(principle);
+
+  if (item.fullSummary) {
+    const full = el('div', 'holding');
+    full.style.marginTop = '9px';
+    full.appendChild(el('b', null, 'FULL SUMMARY: '));
+    full.appendChild(document.createTextNode(item.fullSummary));
+    card.appendChild(full);
+  }
 
   if (item.sections && item.sections.length) {
     const sections = el('div', 'sections');
@@ -1916,14 +1968,69 @@ function openAccount() {
 function renderProfileTab(panel, close) {
   const user = state.user;
 
+  /*
+   * Name, state and city are the advocate's to change. The state matters most:
+   * it decides whose judgments come first, and somebody who signed in with
+   * Google was never asked for it.
+   */
+  const edit = el('div', 'profile-form');
+  edit.innerHTML =
+    '<div class="field"><label for="p-name">Name</label>' +
+      '<input id="p-name" type="text" autocomplete="name" maxlength="120"></div>' +
+    practiceFields('p', user.state, user.city, false);
+  edit.querySelector('#p-name').value = user.fullName || '';
+
+  const save = el('button', 'btn', 'Save changes');
+  const feedback = el('div');
+  feedback.style.marginTop = '10px';
+
+  save.onclick = async () => {
+    const changes = {};
+    const name = edit.querySelector('#p-name').value.trim();
+    const chosen = edit.querySelector('#p-state');
+    const city = edit.querySelector('#p-city');
+
+    if (name !== (user.fullName || '')) changes.fullName = name;
+    if (chosen && chosen.value.toLowerCase() !== (user.state || '').toLowerCase()) {
+      changes.state = chosen.value || null;
+    }
+    if (city && city.value.trim() !== (user.city || '')) changes.city = city.value.trim();
+
+    if (!Object.keys(changes).length) {
+      feedback.innerHTML = '<div class="alert info">Nothing has changed.</div>';
+      return;
+    }
+
+    const restore = buttonBusy(save, 'Saving…');
+    feedback.innerHTML = '';
+    try {
+      const result = await api('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(changes) });
+      state.user = result.user;
+      renderAccountButton();
+      // The "where do you practise?" prompt behind this dialog goes once answered.
+      renderMessages();
+      restore();
+      // Redrawn from what was stored, so the form shows the server's spelling.
+      panel.innerHTML = '';
+      renderProfileTab(panel, close);
+      toast('Profile saved.');
+    } catch (err) {
+      restore();
+      feedback.innerHTML = '<div class="alert error">' + esc(err.message) + '</div>';
+    }
+  };
+
+  panel.appendChild(edit);
+  panel.appendChild(save);
+  panel.appendChild(feedback);
+
   const rows = el('div');
-  rows.appendChild(infoRow('Name', user.fullName || 'Not set'));
+  rows.style.marginTop = '22px';
   rows.appendChild(infoRow('Email', user.email || 'Not set',
     user.email ? (user.emailVerified ? 'Confirmed' : 'Unconfirmed') : null,
     user.email && !user.emailVerified));
   rows.appendChild(infoRow('WhatsApp', user.phoneNumber || 'Not linked',
     user.phoneVerified ? 'Verified' : null, false));
-  rows.appendChild(infoRow('Practice', [user.city, user.state].filter(Boolean).join(', ') || 'Not set'));
   rows.appendChild(infoRow('Bar Council ID', user.barCouncilOnRecord ? 'On record' : 'Not submitted'));
   rows.appendChild(infoRow('Account status',
     user.verificationStatus === 'VERIFIED' ? 'Verified advocate' : 'Guest'));

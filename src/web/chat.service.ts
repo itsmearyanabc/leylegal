@@ -5,6 +5,7 @@ import {
   NOT_AVAILABLE,
   PrecedentsService,
   legalPrinciple,
+  orderingNote,
   splitParties,
   stripEllipsis,
 } from '../ai/precedents.service';
@@ -517,6 +518,8 @@ export class ChatService {
         kind: 'precedents',
         query: intent.searchQuery,
         source: searched.source,
+        // Worded here, once, so the web says what WhatsApp says.
+        ordering: searched.namedCase ? null : orderingNote(searched.grouping),
         lexicalOnly: searched.lexicalOnly,
         totalMatches: searched.totalMatches,
         emptyReason,
@@ -778,6 +781,9 @@ export function toPublicPrecedent(row: PrecedentRow) {
     bench,
     equivalentCitations: equivalents,
     legalPrinciple: legalPrinciple(row),
+    // The longer summary, only on a judgment asked for by name - see
+    // PrecedentsService.withSummary. WhatsApp prints it as FULL SUMMARY.
+    fullSummary: row.generated_summary ?? null,
     notAvailable: NOT_AVAILABLE,
 
     court: row.court_name,
