@@ -1183,10 +1183,9 @@ function renderPrecedentCard(item) {
   field('RESPONDENT', value(item.respondent));
   field('DATE OF JUDGMENT', item.date ? formatDate(item.date) : absent);
   field('BENCH', value(item.bench));
-  field('EQUIVALENT CITATIONS',
-    item.equivalentCitations && item.equivalentCitations.length
-      ? item.equivalentCitations.join('; ')
-      : absent);
+  if (item.equivalentCitations && item.equivalentCitations.length) {
+    field('EQUIVALENT CITATIONS', item.equivalentCitations.join('; '));
+  }
   field('COURT', value(item.court));
   card.appendChild(rows);
 
