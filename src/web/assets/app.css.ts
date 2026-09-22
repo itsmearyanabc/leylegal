@@ -359,6 +359,32 @@ button { cursor:pointer; }
   background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center;
 }
 .send-btn:disabled { background:var(--border); color:var(--dim); }
+/* While an answer is on its way the same button stops it. */
+.send-btn.stop { animation:fade-in .15s ease both; }
+.send-btn.stop:not(:disabled):hover { background:var(--accent-hover); }
+
+/* Editing the latest question in place. */
+.edit-btn { display:inline-flex; align-items:center; gap:5px; }
+.edit-box textarea {
+  width:100%; resize:none; background:var(--surface); border:1px solid var(--accent);
+  border-radius:var(--radius-sm); padding:10px 12px; font-size:15px; line-height:1.5;
+  box-shadow:0 0 0 3px var(--border); outline:none;
+}
+.edit-hint { font-size:12px; color:var(--dim); margin-top:6px; }
+.edit-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
+
+.toast {
+  /* Above the composer, which is where the eye is when it appears. */
+  position:fixed; left:50%; bottom:112px; transform:translateX(-50%); z-index:60;
+  max-width:calc(100vw - 32px); padding:11px 15px; border-radius:var(--radius-sm);
+  background:var(--accent); color:var(--accent-ink); font-size:13.5px; font-weight:500;
+  box-shadow:var(--shadow-lg); animation:toast-in .2s ease both;
+}
+/* Its own keyframes: the shared ones end on transform:none, which would undo the centring. */
+@keyframes toast-in {
+  from { opacity:0; transform:translate(-50%, 8px); }
+  to { opacity:1; transform:translate(-50%, 0); }
+}
 .composer-note { font-size:11.5px; color:var(--dim); text-align:center; margin-top:9px; line-height:1.5; }
 
 /* ==========================================================================

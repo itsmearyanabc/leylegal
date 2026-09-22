@@ -582,7 +582,8 @@ async function enterApp(threadsLoad) {
   $('#theme-toggle').onclick = toggleTheme;
   $('#account-btn').onclick = openAccount;
   $('#credit-chip').onclick = openCredits;
-  $('#send').onclick = submitQuestion;
+  // One button, two jobs: Send, and Stop while an answer is on its way.
+  $('#send').onclick = () => (state.busy ? stopAnswer() : submitQuestion());
 
   const composer = $('#composer');
   composer.addEventListener('input', autoGrow);
@@ -770,15 +771,39 @@ const STAGE_LABELS = {
   verifying: 'Verifying every citation',
 };
 
-async function submitQuestion() {
+/**
+ * Ask a question - the one in the composer, or an edited one.
+ *
+ * An edit arrives as { question, replaceMessageId }: the server removes that
+ * question and everything after it, then answers the new one in its place.
+ */
+async function submitQuestion(edit) {
   if (state.busy) return;
 
   const composer = $('#composer');
-  const question = composer.value.trim();
+  const question = edit ? edit.question.trim() : composer.value.trim();
   if (!question) return;
 
-  composer.value = '';
-  autoGrow();
+  if (!edit) {
+    composer.value = '';
+    autoGrow();
+  }
+
+  /*
+   * Everything Stop needs to undo this turn on screen: the id the server knows
+   * the request by, the messages it has sent back so far, and the question, so
+   * it can be handed back for editing.
+   */
+  const turn = {
+    requestId: newRequestId(),
+    controller: new AbortController(),
+    question,
+    messageIds: new Set(),
+    ready: false,
+    stopping: false,
+    stopped: false,
+  };
+  state.turn = turn;
   setBusy(true);
 
   // Shown immediately, before the server confirms, so the interface responds to
@@ -797,7 +822,13 @@ async function submitQuestion() {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ threadId: state.threadId, question }),
+      signal: turn.controller.signal,
+      body: JSON.stringify({
+        threadId: state.threadId,
+        question,
+        requestId: turn.requestId,
+        replaceMessageId: edit ? edit.replaceMessageId : undefined,
+      }),
     });
 
     if (!response.ok || !response.body) {
@@ -805,19 +836,93 @@ async function submitQuestion() {
       throw new Error((failure && failure.error && failure.error.message) || 'Could not send that.');
     }
 
-    await readEventStream(response.body, (event) => handleChatEvent(event, live));
+    await readEventStream(response.body, (event) => handleChatEvent(event, live, turn));
   } catch (err) {
     live.done = true;
-    state.messages.push({
-      id: 'error-' + Date.now(), role: 'assistant', content: err.message,
-      citations: [], structured: null, error: 'client',
-    });
-    renderMessages();
+    // A stopped answer ends in an aborted fetch. That is the request doing as
+    // it was told, not something to report.
+    if (!turn.stopped) {
+      state.messages.push({
+        id: 'error-' + Date.now(), role: 'assistant', content: err.message,
+        citations: [], structured: null, error: 'client',
+      });
+    }
   } finally {
+    if (state.turn === turn) state.turn = null;
     setBusy(false);
     removeLiveStages();
-    renderMessages();
+
+    if (turn.stopped) {
+      // Off the screen, as it is out of the thread and off the bill.
+      state.messages = state.messages.filter(
+        (m) => m.id !== 'pending' && !turn.messageIds.has(m.id),
+      );
+      renderMessages();
+
+      // A conversation that held only the stopped question is empty again:
+      // named as new, and gone from the sidebar until something is asked.
+      if (!state.messages.length) $('#thread-title').textContent = 'New chat';
+      void loadThreads();
+
+      // Handed back, so fixing a typo is an edit rather than retyping it.
+      composer.value = turn.question;
+      autoGrow();
+      composer.focus();
+      composer.setSelectionRange(composer.value.length, composer.value.length);
+      toast('Stopped. You were not charged - edit your question and send it again.');
+    } else {
+      renderMessages();
+    }
   }
+}
+
+/**
+ * Stop the answer on its way.
+ *
+ * The server is told first and the connection dropped second: it is the
+ * server that refunds the credits and removes the question, and it refuses
+ * once the answer has been sent - in which case the answer is left to arrive,
+ * because it has been paid for.
+ */
+async function stopAnswer() {
+  const turn = state.turn;
+  if (!turn || !turn.ready || turn.stopping || turn.stopped) return;
+
+  turn.stopping = true;
+  $('#send').disabled = true;
+
+  let result = null;
+  try {
+    result = await post('/api/chat/stop', { requestId: turn.requestId });
+  } catch (_) { /* reported below */ }
+
+  if (!result || !result.stopped) {
+    turn.stopping = false;
+    if (state.turn === turn) $('#send').disabled = false;
+    if (!result) toast('Could not stop that answer. It will finish as normal.');
+    return;
+  }
+
+  turn.stopped = true;
+  if (result.credits) { state.credits = result.credits; renderCredits(); }
+  turn.controller.abort();
+}
+
+function newRequestId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+}
+
+/** A short message at the bottom of the screen that goes away on its own. */
+function toast(text) {
+  const existing = $('#toast');
+  if (existing) existing.remove();
+
+  const note = el('div', 'toast', text);
+  note.id = 'toast';
+  note.setAttribute('role', 'status');
+  document.body.appendChild(note);
+  setTimeout(() => note.remove(), 5000);
 }
 
 /**
@@ -860,12 +965,24 @@ async function readEventStream(body, onEvent) {
   }
 }
 
-function handleChatEvent(event, live) {
+function handleChatEvent(event, live, turn) {
+  // Anything still in the pipe after Stop belongs to an answer being undone.
+  if (turn.stopped) return;
+  if ((event.type === 'message' || event.type === 'answer') && event.message) {
+    turn.messageIds.add(event.message.id);
+  }
+
   if (event.type === 'thread') {
     const isNew = state.threadId !== event.threadId;
     state.threadId = event.threadId;
     $('#thread-title').textContent = event.title;
     if (isNew) void loadThreads();
+
+    // The server now knows this request by its id, so Stop can reach it.
+    // Offered from here and not before, or a Stop pressed in the first
+    // instant would arrive ahead of the request it is stopping.
+    turn.ready = true;
+    if (!turn.stopping) $('#send').disabled = false;
     return;
   }
 
@@ -904,7 +1021,13 @@ function handleChatEvent(event, live) {
 
 function setBusy(busy) {
   state.busy = busy;
-  $('#send').disabled = busy;
+  const send = $('#send');
+  send.classList.toggle('stop', busy);
+  send.innerHTML = busy ? ICON_STOP : ICON_SEND;
+  send.setAttribute('aria-label', busy ? 'Stop' : 'Send');
+  send.title = busy ? 'Stop' : 'Send';
+  // Stop is enabled when the server has the request - see handleChatEvent.
+  send.disabled = busy;
   $('#composer').disabled = busy;
 }
 
@@ -1057,8 +1180,80 @@ function renderMessage(message) {
     body.appendChild(messageMeta(message));
   }
 
+  if (message.role === 'user' && isEditable(message)) {
+    const meta = el('div', 'msg-meta');
+    const edit = el('button', 'copy-btn edit-btn');
+    edit.innerHTML = ICON_EDIT + '<span>Edit</span>';
+    edit.onclick = () => openEditor(message, body);
+    meta.appendChild(edit);
+    body.appendChild(meta);
+  }
+
   wrap.appendChild(body);
   return wrap;
+}
+
+/**
+ * The latest question only, and only when it is settled.
+ *
+ * Editing replaces the turn - the question and the answer to it. On the last
+ * one that is exactly what is wanted; on an earlier one it would take every
+ * later answer in the thread with it, which is a lot to lose to one click.
+ */
+function isEditable(message) {
+  if (state.busy || !message.id || message.id === 'pending') return false;
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    if (state.messages[i].role === 'user') return state.messages[i] === message;
+  }
+  return false;
+}
+
+function openEditor(message, body) {
+  body.innerHTML = '';
+
+  const box = el('div', 'edit-box');
+  const area = el('textarea');
+  area.value = message.content;
+  area.rows = 2;
+
+  const hint = el('div', 'edit-hint', 'Sending replaces this question and its answer.');
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn ghost small', 'Cancel');
+  const send = el('button', 'btn small', 'Send');
+  actions.appendChild(cancel);
+  actions.appendChild(send);
+
+  const grow = () => {
+    area.style.height = 'auto';
+    area.style.height = Math.min(area.scrollHeight, 260) + 'px';
+  };
+
+  const go = () => {
+    const text = area.value.trim();
+    if (!text || text === message.content.trim()) return renderMessages();
+
+    // Off the screen now, as the server takes them out of the thread.
+    const at = state.messages.indexOf(message);
+    if (at !== -1) state.messages = state.messages.slice(0, at);
+    submitQuestion({ question: text, replaceMessageId: message.id });
+  };
+
+  cancel.onclick = () => renderMessages();
+  send.onclick = go;
+  area.addEventListener('input', grow);
+  area.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); go(); }
+    if (event.key === 'Escape') renderMessages();
+  });
+
+  box.appendChild(area);
+  box.appendChild(hint);
+  box.appendChild(actions);
+  body.appendChild(box);
+
+  grow();
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
 }
 
 function messageMeta(message) {
@@ -2087,6 +2282,11 @@ const ICON_THEME = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" 
   'stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
 const ICON_SEND = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
   'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>';
+const ICON_STOP = '<svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">' +
+  '<rect x="3" y="3" width="18" height="18" rx="3" fill="currentColor"/></svg>';
+const ICON_EDIT = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 
 boot();
 `;

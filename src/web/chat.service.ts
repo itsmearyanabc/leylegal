@@ -113,6 +113,13 @@ export class ChatService {
     user: UserRow;
     threadId: string | null;
     question: string;
+    /**
+     * An edited question: this earlier question of the advocate's, and
+     * everything after it, is replaced by the new one.
+     */
+    replaceMessageId?: string | null;
+    /** True once the advocate has pressed Stop - see ChatController.stop. */
+    stopped?: () => boolean;
   }): AsyncGenerator<ChatEvent> {
     const question = input.question.trim();
     const user = input.user;
@@ -134,6 +141,11 @@ export class ChatService {
       return;
     }
 
+    // Before the title, so a thread emptied by the edit is named by the edit.
+    if (input.replaceMessageId) {
+      await this.chats.deleteFromMessage(user.id, thread.id, input.replaceMessageId);
+    }
+
     await this.chats.autoTitle(thread.id, question);
     yield { type: 'thread', threadId: thread.id, title: thread.title };
 
@@ -151,7 +163,7 @@ export class ChatService {
     const reference = `spend:web:${userMessage.id}`;
 
     try {
-      yield* this.answer({ user, threadId: thread.id, question, reference });
+      yield* this.answer({ user, threadId: thread.id, question, reference, stopped: input.stopped });
     } catch (err) {
       this.logger.error({ err, userId: user.id, threadId: thread.id }, 'Web chat answer failed');
 
@@ -183,6 +195,7 @@ export class ChatService {
     threadId: string;
     question: string;
     reference: string;
+    stopped?: () => boolean;
   }): AsyncGenerator<ChatEvent> {
     const { user, threadId, question, reference } = input;
 
@@ -208,6 +221,11 @@ export class ChatService {
       yield* this.answerSmallTalk({ user, threadId, question, language: intent.language });
       return;
     }
+
+    // Stopped while the question was being read: nothing has been charged yet,
+    // and nothing will be. Checked here because this is the last moment that
+    // costs nothing - past it the charge is taken and the model is called.
+    if (input.stopped?.()) return;
 
     const decision = await this.credits.spend({
       userId: user.id,
@@ -250,6 +268,40 @@ export class ChatService {
     }
 
     yield* this.answerWithRag({ user, threadId, question, intent, charged: decision.charged });
+  }
+
+  /**
+   * Undo a turn the advocate stopped before its answer reached them.
+   *
+   * The charge is refunded and the question - with anything written in reply
+   * to it - is removed, so the thread reads as if it had not been asked and the
+   * edited question lands in its place. Safe to run twice, and it is: once the
+   * moment Stop is pressed, so a resend finds the thread clean, and again when
+   * the abandoned answer finishes, for whatever it charged or wrote after the
+   * first pass. The refund is keyed on the question, so the second pays out
+   * only what the first could not yet see.
+   */
+  async discardTurn(input: {
+    user: UserRow;
+    threadId: string | null;
+    userMessageId: string | null;
+    messageIds: string[];
+  }): Promise<void> {
+    const { user, threadId, userMessageId } = input;
+
+    if (userMessageId) {
+      await this.credits.refund(
+        user.id,
+        user.role,
+        `spend:web:${userMessageId}`,
+        'Stopped before the answer arrived',
+      );
+    }
+    if (threadId && input.messageIds.length > 0) {
+      await this.chats.deleteMessages(user.id, threadId, input.messageIds);
+    }
+
+    this.logger.info({ userId: user.id, threadId, removed: input.messageIds.length }, 'Stopped turn discarded');
   }
 
   // ---------------------------------------------------------------------------
