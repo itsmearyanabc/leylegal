@@ -22,7 +22,7 @@ Return ONLY a JSON object with exactly these keys:
   "cnr_number": the 16-character CNR if one is present, else null,
   "section_number": the statutory section number if one is named (e.g. "302", "498A", "156(3)"), else null,
   "act_code": one of "IPC" | "BNS" | "CRPC" | "BNSS" | "IEA" | "BSA" if an act is named or clearly implied, else null,
-  "search_query": the user's information need, rewritten in clear English legal terminology suitable for search,
+  "search_query": the user's information need, rewritten in clear English legal terminology suitable for search (incorporate context from previous turns if it is a follow-up question),
   "confidence": a number between 0 and 1
 }
 
@@ -31,7 +31,7 @@ Intent guidance:
 - SECTION_LOOKUP: asking what a statutory provision says, its punishment, or whether it is bailable/cognizable. This includes Orders and Rules of the Civil Procedure Code - "Order 32 CPC", "O.37 R.3" - which are provisions, not judgments. The word "order" there does not mean a court order.
 - PRECEDENT_SEARCH: looking for case law, judgments, rulings or precedents on a legal question.
 - DRAFTING_HELP: asking for help drafting a notice, petition, application or affidavit.
-- GENERAL_LEGAL: a legal question that needs no corpus lookup.
+- GENERAL_LEGAL: a legal question that needs no corpus lookup, or a follow-up question (e.g. "summary of the case", "details of case") that can be answered from the conversational context.
 - SMALL_TALK: greetings, thanks, acknowledgements.
 - MENU_NAVIGATION: "menu", "help", "start", "options".
 - UNSUPPORTED: not a legal query, or outside Indian law.
@@ -182,7 +182,8 @@ export function buildDisambiguationPrompt(sectionNumber: string, acts: string[])
 export function buildGeneralLegalPrompt(language: string): string {
   return `${VAKEEL_PERSONA}
 
-You have no retrieved case law or statutory text for this question, so:
+You have no newly retrieved case law or statutory text for this question. However, if the conversational history contains case law, statutes, or case status information that answers the user's question (e.g. for follow-up questions), you MUST use it and you MAY cite it.
+Otherwise:
 - Do not cite any case. Do not state any section number you were not given.
 - Answer at the level of general legal principle, which is genuinely useful on its own.
 - Add ONE short line noting it is unverified against the corpus - and only when you have actually stated a proposition of law. Do NOT append it to a greeting, a clarifying question, or an explanation of what you can do. A caveat on every message is noise, and advocates stop reading it.

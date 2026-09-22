@@ -660,7 +660,8 @@ export class ConversationService {
     // does is decide *which feature* to run - the advocate already said that by
     // choosing from the menu, and overriding them with a model's guess is how
     // "2" for a section lookup used to end up as a precedent search.
-    const intent = await this.intents.classify(query);
+    const history = await this.memory.load(user.id);
+    const intent = await this.intents.classify(query, history);
 
     if (kind === 'PRECEDENT') {
       return this.answerPrecedents(user, { ...intent, intent: 'PRECEDENT_SEARCH' }, query, job);
@@ -1024,7 +1025,8 @@ export class ConversationService {
     text: string,
     job: InboundMessageJob,
   ): Promise<AnswerOutcome> {
-    const intent = await this.intents.classify(text);
+    const history = await this.memory.load(user.id);
+    const intent = await this.intents.classify(text, history);
 
     // Track the user's language automatically so replies match how they write,
     // without making them find the language menu.
@@ -1114,7 +1116,9 @@ export class ConversationService {
 
     try {
       const status = await this.ecourts.lookup(cnr);
-      await this.api.sendText(user.phone_number, Replies.formatCaseStatus(status));
+      const formattedStatus = Replies.formatCaseStatus(status);
+      await this.api.sendText(user.phone_number, formattedStatus);
+      await this.memory.append(user.id, originalQuery, formattedStatus);
 
       await this.analytics.recordSearch({
         userId: user.id,
@@ -1242,6 +1246,8 @@ export class ConversationService {
           'WhatsApp refused delivery of the results',
         )
         .catch((err) => this.logger.warn({ err }, 'Could not refund an undelivered precedent page'));
+    } else {
+      await this.memory.append(user.id, originalText, body);
     }
 
     /*

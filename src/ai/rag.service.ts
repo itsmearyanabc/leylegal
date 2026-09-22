@@ -257,7 +257,7 @@ export class RagService {
 
     // Every generated answer passes through verification before anyone sees it.
     onStage?.('verifying');
-    const checked = await this.guardrails.verify(result.text, passages, intent);
+    const checked = await this.guardrails.verify(result.text, passages, intent, history);
 
     return {
       text: checked.text,

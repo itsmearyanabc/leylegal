@@ -4,6 +4,7 @@ import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { RetrievedChunk } from '../database/types';
 import { ClassifiedIntent } from './intent.service';
 import { extractCitations, extractStatuteRefs } from './legal-patterns';
+import { LlmMessage } from './providers/llm-provider.interface';
 
 export interface GuardrailReport {
   /** The answer after removing anything that could not be verified. */
@@ -51,7 +52,7 @@ export class GuardrailsService {
 
   constructor(private readonly corpus: CorpusRepository) {}
 
-  async verify(answer: string, retrieved: RetrievedChunk[], intent?: ClassifiedIntent): Promise<GuardrailReport> {
+  async verify(answer: string, retrieved: RetrievedChunk[], intent?: ClassifiedIntent, history: LlmMessage[] = []): Promise<GuardrailReport> {
     if (!answer.trim()) {
       return { text: answer, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null };
     }
@@ -68,6 +69,10 @@ export class GuardrailsService {
     for (const chunk of retrieved) {
       if (chunk.neutral_citation) grounded.add(this.normalise(chunk.neutral_citation));
       for (const reporter of chunk.reporter_citations ?? []) grounded.add(this.normalise(reporter));
+    }
+    for (const msg of history) {
+      const historyCitations = extractCitations(msg.content);
+      for (const cit of historyCitations) grounded.add(this.normalise(cit));
     }
 
     const [citationChecks, statuteChecks] = await Promise.all([

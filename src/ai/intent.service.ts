@@ -11,7 +11,7 @@ import {
   normaliseActCode,
 } from './legal-patterns';
 import { INTENT_CLASSIFIER_SYSTEM } from './prompts';
-import { parseJsonLoose } from './providers/llm-provider.interface';
+import { LlmMessage, parseJsonLoose } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
 
 export interface ClassifiedIntent {
@@ -63,7 +63,7 @@ export class IntentService {
 
   constructor(private readonly registry: ProviderRegistry) {}
 
-  async classify(text: string): Promise<ClassifiedIntent> {
+  async classify(text: string, history: LlmMessage[] = []): Promise<ClassifiedIntent> {
     // Deterministic extraction first. A CNR or section number found by regex is
     // more reliable than one transcribed by a model, and it gives us a correct
     // answer even if the LLM call fails entirely.
@@ -90,7 +90,7 @@ export class IntentService {
       const result = await this.registry.complete({
         task: 'router',
         system: INTENT_CLASSIFIER_SYSTEM,
-        messages: [{ role: 'user', content: text }],
+        messages: [...history.slice(-4), { role: 'user', content: text }],
         json: true,
         maxTokens: 512,
       });
