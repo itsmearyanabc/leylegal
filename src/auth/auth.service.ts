@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { RateLimiter } from '../common/rate-limiter';
+import { canonicalState } from '../common/states';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
 import { CreditsService } from '../credits/credits.service';
@@ -9,7 +10,6 @@ import { UserRepository } from '../database/repositories/user.repository';
 import { UserRow, WebSessionRow } from '../database/types';
 import { EmailService } from './email.service';
 import { GoogleProfile } from './google-oauth.service';
-import { normalisePhone } from './phone-link.service';
 import { hashPassword, needsRehash, passwordProblem, verifyPassword } from './password';
 import { generateToken, hashToken } from './tokens';
 
@@ -23,7 +23,9 @@ export type AuthFailure =
   | 'NO_PASSWORD_SET'
   | 'INVALID_TOKEN'
   | 'INVALID_PHONE'
-  | 'PHONE_TAKEN';
+  | 'PHONE_TAKEN'
+  | 'INVALID_STATE'
+  | 'INVALID_PROFILE';
 
 export class AuthError extends Error {
   constructor(
@@ -118,8 +120,10 @@ export class AuthService {
   async signUp(input: {
     email: string;
     password: string;
-    phoneNumber: string;
     fullName: string | null;
+    /** Where they practise. Optional here; the signup form asks for it. */
+    state?: string | null;
+    city?: string | null;
     userAgent: string | null;
     ip: string | null;
   }): Promise<SignedInSession> {
@@ -129,31 +133,25 @@ export class AuthService {
       throw new AuthError('INVALID_EMAIL', 'Enter a valid email address.');
     }
 
+    // A state that names no court is refused rather than stored: it would sit
+    // on the account looking like an answer while promoting nothing.
+    const state = input.state ? canonicalState(input.state) : null;
+    if (input.state && !state) {
+      throw new AuthError('INVALID_STATE', 'Choose the state where you practise from the list.');
+    }
+    const city = cleanCity(input.city);
+
     /*
-     * The number is validated here and deliberately not stored.
+     * No WhatsApp number.
      *
-     * `users.phone_number` is UNIQUE, so writing an unproven number would let
-     * anyone reserve a handset they do not own simply by typing it into the
-     * signup form - and the real owner would then be unable to register at all.
-     * The claim lives in the verification token's `subject` until a code proves
-     * it, and PhoneVerificationService writes it to the row at that point.
+     * It was required here, validated, checked against every other account -
+     * and then thrown away, because an unproven number is never stored (the
+     * column is UNIQUE, and storing one would let anyone reserve a handset
+     * they do not own). With signup sending no code, nothing ever proved it,
+     * so the field only turned people away: a mistyped number, or one already
+     * talking to the bot, refused the account outright. A number is linked
+     * from the account screen, by a message from that handset.
      */
-    const phoneNumber = normalisePhone(input.phoneNumber);
-    if (phoneNumber.length < 10 || phoneNumber.length > 15) {
-      throw new AuthError('INVALID_PHONE', 'Enter your WhatsApp number in international format, e.g. 919876543210.');
-    }
-
-    // Refused up front rather than at verification, so the person is told
-    // before they wait for a code that can never succeed. The check is repeated
-    // after the code is proven, because these two moments are minutes apart.
-    const numberOwner = await this.users.findByPhone(phoneNumber);
-    if (numberOwner && (numberOwner.password_hash || numberOwner.email)) {
-      throw new AuthError(
-        'PHONE_TAKEN',
-        'An account already exists for this WhatsApp number. Try signing in instead.',
-      );
-    }
-
     const weak = passwordProblem(input.password, this.env.PASSWORD_MIN_LENGTH);
     if (weak) throw new AuthError('WEAK_PASSWORD', weak);
 
@@ -170,6 +168,8 @@ export class AuthService {
       fullName: input.fullName?.trim() || null,
       avatarUrl: null,
       source: 'WEB_PASSWORD',
+      state,
+      city,
       // Not verified. Access is not gated on it - an advocate can ask a
       // question immediately, which is the zero-friction onboarding the product
       // is built around - but a password reset is, because resetting to an
@@ -386,6 +386,45 @@ export class AuthService {
     return found;
   }
 
+  /**
+   * The advocate changing their own name, state or city.
+   *
+   * Only what was sent changes; a field left out keeps its value. The state is
+   * the one that matters most - it decides whose judgments come first - so it
+   * is checked against the list and never stored as typed.
+   */
+  async updateProfile(
+    user: UserRow,
+    changes: { fullName?: unknown; state?: unknown; city?: unknown },
+  ): Promise<UserRow> {
+    let fullName = user.full_name;
+    if (changes.fullName !== undefined) {
+      const name = typeof changes.fullName === 'string' ? changes.fullName.replace(/\s+/g, ' ').trim() : '';
+      if (!name || name.length > 120) {
+        throw new AuthError('INVALID_PROFILE', 'Enter your name - up to 120 characters.');
+      }
+      fullName = name;
+    }
+
+    let state = user.bar_council_state;
+    if (changes.state !== undefined) {
+      if (changes.state === null || changes.state === '') {
+        state = null;
+      } else {
+        state = canonicalState(changes.state);
+        if (!state) throw new AuthError('INVALID_STATE', 'Choose the state where you practise from the list.');
+      }
+    }
+
+    const city = changes.city !== undefined ? cleanCity(changes.city) : user.city;
+
+    const updated = await this.users.updateProfile(user.id, { fullName, state, city });
+    if (!updated) throw new AuthError('INVALID_PROFILE', 'Your profile could not be saved. Please try again.');
+
+    this.logger.info({ userId: user.id, stateChanged: state !== user.bar_council_state }, 'Profile updated');
+    return updated;
+  }
+
   async signOut(token: string): Promise<void> {
     await this.auth.revokeSession(hashToken(token));
   }
@@ -553,3 +592,10 @@ function normaliseEmail(value: string): string {
  * `dummyHashMatchesCurrentCost` in password.spec.ts fails if they drift.
  */
 export const DUMMY_HASH = 'scrypt$32768$8$1$AAAAAAAAAAAAAAAAAAAAAA==$' + 'A'.repeat(88);
+
+/** A city as typed, tidied - or null. Free text: there are too many to list. */
+function cleanCity(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const city = value.replace(/\s+/g, ' ').trim().slice(0, 80);
+  return city || null;
+}

@@ -359,6 +359,44 @@ button { cursor:pointer; }
   background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center;
 }
 .send-btn:disabled { background:var(--border); color:var(--dim); }
+/* While an answer is on its way the same button stops it. */
+.send-btn.stop { animation:fade-in .15s ease both; }
+.send-btn.stop:not(:disabled):hover { background:var(--accent-hover); }
+
+/* Asking for the state, on a new conversation, when there is none. */
+.state-nudge {
+  display:block; width:100%; margin-top:14px; text-align:left; cursor:pointer;
+  padding:13px 15px; border-radius:var(--radius); border:1px dashed var(--olive);
+  background:var(--olive-light); color:var(--text);
+}
+.state-nudge b { display:block; font-size:13.5px; margin-bottom:3px; }
+.state-nudge span { font-size:13px; color:var(--muted); }
+.state-nudge:hover { border-style:solid; }
+.field .optional { font-weight:500; color:var(--dim); }
+.profile-form { margin-bottom:12px; }
+
+/* Editing the latest question in place. */
+.edit-btn { display:inline-flex; align-items:center; gap:5px; }
+.edit-box textarea {
+  width:100%; resize:none; background:var(--surface); border:1px solid var(--accent);
+  border-radius:var(--radius-sm); padding:10px 12px; font-size:15px; line-height:1.5;
+  box-shadow:0 0 0 3px var(--border); outline:none;
+}
+.edit-hint { font-size:12px; color:var(--dim); margin-top:6px; }
+.edit-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
+
+.toast {
+  /* Above the composer, which is where the eye is when it appears. */
+  position:fixed; left:50%; bottom:112px; transform:translateX(-50%); z-index:60;
+  max-width:calc(100vw - 32px); padding:11px 15px; border-radius:var(--radius-sm);
+  background:var(--accent); color:var(--accent-ink); font-size:13.5px; font-weight:500;
+  box-shadow:var(--shadow-lg); animation:toast-in .2s ease both;
+}
+/* Its own keyframes: the shared ones end on transform:none, which would undo the centring. */
+@keyframes toast-in {
+  from { opacity:0; transform:translate(-50%, 8px); }
+  to { opacity:1; transform:translate(-50%, 0); }
+}
 .composer-note { font-size:11.5px; color:var(--dim); text-align:center; margin-top:9px; line-height:1.5; }
 
 /* ==========================================================================
@@ -445,6 +483,65 @@ button { cursor:pointer; }
   .composer-wrap { padding:10px 12px 14px; }
   .empty { margin-top:32px; }
 }
+
+/* ==========================================================================
+   Loading, and getting from one screen to the next
+   ========================================================================== */
+/* In the HTML itself, so it is on screen before a byte of script has run. */
+#boot {
+  position:fixed; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:14px; background:var(--bg);
+  animation:fade-in .2s ease both;
+}
+.boot-mark {
+  width:52px; height:52px; border-radius:15px; background:var(--accent); color:var(--accent-ink);
+  display:flex; align-items:center; justify-content:center;
+  font-weight:800; font-size:19px; letter-spacing:-.02em;
+  animation:breathe 1.6s ease-in-out infinite;
+}
+.boot-name { font-weight:700; font-size:15px; letter-spacing:-.2px; }
+.boot-bar { width:140px; height:3px; border-radius:3px; background:var(--surface-3); overflow:hidden; }
+.boot-bar span {
+  display:block; width:40%; height:100%; border-radius:3px; background:var(--accent);
+  animation:slide 1.1s ease-in-out infinite;
+}
+
+.auth-card { animation:rise .28s ease both; }
+#app.ready { animation:fade-in .22s ease both; }
+
+/* Placeholder rows while the conversation list is on its way. */
+.skeleton-row {
+  height:30px; margin:6px 4px; border-radius:8px;
+  background:linear-gradient(90deg, var(--surface-3) 0%, var(--surface) 50%, var(--surface-3) 100%);
+  background-size:200% 100%; animation:shimmer 1.2s linear infinite;
+}
+.skeleton-row.short { width:62%; }
+
+/* A spinner inside a button takes the button's own ink, in either theme. */
+.btn .spinner { border-color:currentColor; border-top-color:transparent; opacity:.85; }
+.btn.busy:disabled { opacity:.8; cursor:progress; }
+
+@keyframes fade-in { from { opacity:0; } to { opacity:1; } }
+@keyframes rise { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+@keyframes breathe { 0%, 100% { transform:scale(1); } 50% { transform:scale(1.06); } }
+@keyframes slide { from { transform:translateX(-100%); } to { transform:translateX(250%); } }
+@keyframes shimmer { from { background-position:200% 0; } to { background-position:-200% 0; } }
+
+/* ==========================================================================
+   Show / hide password
+   ========================================================================== */
+.pw-wrap { position:relative; }
+.pw-wrap input { padding-right:46px !important; }
+.pw-toggle {
+  position:absolute; top:50%; right:6px; transform:translateY(-50%);
+  width:34px; height:34px; padding:0; border:0; border-radius:6px;
+  display:flex; align-items:center; justify-content:center;
+  background:transparent; color:var(--dim);
+}
+.pw-toggle:hover { color:var(--text); background:var(--surface-2); }
+.pw-toggle svg { width:18px; height:18px; }
+/* Edge draws its own eye; two side by side would be one too many. */
+input::-ms-reveal, input::-ms-clear { display:none; }
 
 @media (prefers-reduced-motion:reduce) {
   * { animation-duration:.01ms !important; transition-duration:.01ms !important; }

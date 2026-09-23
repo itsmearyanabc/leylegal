@@ -128,6 +128,32 @@ describe('spotting that a judgment was named', () => {
       ),
     ).toBeNull();
   });
+
+  it.each([
+    'give me summary of Rajesh Kumar Mittal vs State of Bihar in 100 words',
+    'summary of Rajesh Kumar Mittal vs State of Bihar',
+    'can you summarise Rajesh Kumar Mittal vs State of Bihar',
+    'Rajesh Kumar Mittal vs State of Bihar ka summary 100 words me do',
+    'Rajesh Kumar Mittal vs State of Bihar - short summary please',
+    'Rajesh Kumar Mittal vs State of Bihar summary (2017)',
+  ])('reads the parties out of a request for a summary: %p', (text) => {
+    // The petitioner came out as "give me summary of Rajesh Kumar Mittal",
+    // which scored under the bar and reported the case as not found.
+    expect(extractCaseName(text)).toEqual({
+      petitioner: 'Rajesh Kumar Mittal',
+      respondent: 'State of Bihar',
+    });
+  });
+
+  it('keeps the court behind a request for a summary', () => {
+    expect(
+      extractCaseName('summary of Rajesh Kumar Mittal vs State of Bihar in Patna High Court in 100 words'),
+    ).toMatchObject({
+      petitioner: 'Rajesh Kumar Mittal',
+      respondent: 'State of Bihar',
+      court: expect.stringContaining('Patna High Court'),
+    });
+  });
 });
 
 describe('scoring a title against the name that was asked for', () => {
@@ -218,7 +244,7 @@ describe('what actually gets sent to Indian Kanoon', () => {
       kanoonQuery(
         intent({ rawText: 'case law for Rajesh Kumar Mittal vs State of Bihar', searchQuery: 'rewritten' }),
       ),
-    ).toBe('Rajesh Kumar Mittal State of Bihar');
+    ).toBe('title: Rajesh Kumar Mittal State of Bihar');
   });
 
   it('narrows by court with the operator, never with the court name', () => {
@@ -245,13 +271,13 @@ describe('what actually gets sent to Indian Kanoon', () => {
           searchQuery: 'x',
         }),
       ),
-    ).toBe('Rajesh Kumar Mittal State of Bihar doctypes:patna');
+    ).toBe('doctypes:patna title: Rajesh Kumar Mittal State of Bihar');
   });
 
   it('sends the parties alone when no court was named', () => {
     expect(extractCaseName('Vishaka vs State of Rajasthan')?.court).toBeUndefined();
     expect(kanoonQuery(intent({ rawText: 'Vishaka vs State of Rajasthan' }))).toBe(
-      'Vishaka State of Rajasthan',
+      'title: Vishaka State of Rajasthan',
     );
   });
 
@@ -346,6 +372,46 @@ describe('searching for a provision', () => {
           actCode: 'CPC',
         }),
       ),
-    ).toBe('Rajesh Kumar Mittal State of Bihar');
+    ).toBe('title: Rajesh Kumar Mittal State of Bihar');
+  });
+});
+
+describe('a provision search keeps the court that was named', () => {
+  /*
+   * "Karnataka high court results for 397 IPC" came back with judgments from
+   * everywhere.
+   *
+   * Narrowing the query to the provision threw away every other word in the
+   * question, and one of those words was the only constraint the advocate
+   * actually stated. A cause-title search had exactly this fault and was fixed;
+   * the provision branch was not given the same treatment.
+   */
+  it('restricts to the court by slug, not by its name in the text', () => {
+    expect(
+      kanoonQuery(
+        intent({
+          rawText: 'Karnataka high court results for 397 IPC',
+          searchQuery: 'case law on section 397 of the Indian Penal Code',
+          sectionNumber: '397',
+          actCode: 'IPC',
+        }),
+      ),
+    ).toBe('"Section 397" "Indian Penal Code" doctypes:karnataka');
+  });
+
+  it('adds no restriction when no court was named', () => {
+    expect(
+      kanoonQuery(intent({ rawText: 'judgments on 397 IPC', sectionNumber: '397', actCode: 'IPC' })),
+    ).toBe('"Section 397" "Indian Penal Code"');
+  });
+
+  it('needs the words "high court", not merely a state name', () => {
+    // "bail under the Karnataka Excise Act" is a different question from one
+    // about the Karnataka High Court.
+    expect(
+      kanoonQuery(
+        intent({ rawText: 'section 34 of the Karnataka Excise Act', sectionNumber: '34' }),
+      ),
+    ).toBe('"Section 34"');
   });
 });

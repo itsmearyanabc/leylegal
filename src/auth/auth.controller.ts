@@ -8,6 +8,7 @@ import {
   HttpException,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -17,6 +18,7 @@ import {
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { getLogger } from '../common/logger';
+import { PRACTICE_STATES } from '../common/states';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
 import { CreditsService } from '../credits/credits.service';
@@ -47,6 +49,8 @@ interface SignUpBody {
   password?: string;
   phoneNumber?: string;
   fullName?: string;
+  state?: string;
+  city?: string;
 }
 
 /**
@@ -98,6 +102,8 @@ export class AuthController {
       phoneRecovery: this.settings.whatsappConfigured,
       passwordMinLength: this.env.PASSWORD_MIN_LENGTH,
       payments: this.env.razorpayConfigured,
+      // The one list signup, the profile screen and the server all use.
+      states: PRACTICE_STATES,
     };
   }
 
@@ -112,28 +118,36 @@ export class AuthController {
       this.auth.signUp({
         email: body?.email ?? '',
         password: body?.password ?? '',
-        phoneNumber: body?.phoneNumber ?? '',
         fullName: body?.fullName ?? null,
+        state: body?.state ?? null,
+        city: body?.city ?? null,
         userAgent: req.headers['user-agent'] ?? null,
         ip: req.ip ?? null,
       }),
     );
 
     /*
-     * Awaited, not fired and forgotten.
+     * No code is sent, and none is required.
      *
-     * The account now exists but cannot be used until the number is proven, so
-     * a delivery failure is not a background inconvenience - it is the user
-     * staring at a code entry box that no code will ever arrive for. Waiting
-     * lets the response say so, and `start` returns a reason rather than
-     * throwing, so a failure here never rolls back a good signup.
+     * Signing up used to start a WhatsApp verification here and drop the new
+     * advocate on a code-entry screen. Two things were wrong with that, and the
+     * second is the worse one.
+     *
+     * The code often never arrived: delivery needs a Meta-approved template and
+     * a working WhatsApp configuration, and when either is missing the person
+     * sits in front of a box nothing will ever fill. That is the reported
+     * "code is not getting generated for new user".
+     *
+     * And completeSignIn below had already set the session cookie - so they
+     * were signed in while being told they had to verify. The screen said one
+     * thing and the cookie said another, which is the reported "it logs in even
+     * after saying that".
+     *
+     * Proving the number is still available and is still what links an account
+     * to WhatsApp; the endpoints are untouched. It is no longer the price of
+     * getting in the door.
      */
-    const delivery = await this.phones.start(session.user, body?.phoneNumber ?? '');
-
-    return {
-      ...(await this.completeSignIn(session, reply)),
-      verification: this.deliveryView(delivery),
-    };
+    return this.completeSignIn(session, reply);
   }
 
   @Post('api/auth/login')
@@ -268,6 +282,29 @@ export class AuthController {
   // ---------------------------------------------------------------------------
   // The signed-in account
   // ---------------------------------------------------------------------------
+
+  /**
+   * Change your own name, state or city.
+   *
+   * The state is what decides whose judgments come first in a case-law
+   * search, so this is where an advocate who moved - or who signed in with
+   * Google and was never asked - puts it right.
+   */
+  @Patch('api/auth/profile')
+  @UseGuards(UserAuthGuard)
+  async updateProfile(
+    @Body() body: { fullName?: unknown; state?: unknown; city?: unknown },
+    @Req() req: WebRequest,
+  ) {
+    const updated = await this.run(() =>
+      this.auth.updateProfile(req.principal!.user, {
+        fullName: body?.fullName,
+        state: body?.state,
+        city: body?.city,
+      }),
+    );
+    return { user: publicUser(updated) };
+  }
 
   @Get('api/auth/me')
   @UseGuards(UserAuthGuard)

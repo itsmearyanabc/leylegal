@@ -30,17 +30,29 @@ import { AppEnv } from '../config/env';
  * "prepared statement already exists" errors under load, which are miserable to
  * diagnose because they only appear once connections start being reused.
  */
+const KEEP_WARM_MS = 20_000;
+
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = getLogger().child({ module: 'database' });
   readonly sql: Sql;
+  private keepWarm?: NodeJS.Timeout;
 
   constructor(@InjectEnv() private readonly env: AppEnv) {
     const usesPooler = env.DATABASE_URL.includes('pooler.supabase.com') || env.DATABASE_URL.includes(':6543');
 
     this.sql = postgres(env.DATABASE_URL, {
       max: env.DATABASE_POOL_MAX,
-      idle_timeout: 30,
+      /*
+       * Ten minutes, not thirty seconds.
+       *
+       * The database is in Sydney. A fresh connection is a TCP and TLS
+       * handshake plus pooler auth across that distance - measured at over
+       * three seconds - and at thirty seconds every connection was gone
+       * between one click and the next, so an advocate opening the dashboard
+       * after reading a page paid it again. See also keepWarm below.
+       */
+      idle_timeout: 600,
       connect_timeout: 15,
       ssl: env.DATABASE_SSL === 'require' ? { rejectUnauthorized: false } : false,
       // Required on the Supabase transaction pooler; harmless otherwise, at the
@@ -63,9 +75,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.assertSchemaReady();
+
+    // One trivial query every 20 seconds, so there is always a live connection
+    // waiting for the first visitor after a quiet spell instead of a
+    // three-second handshake to Sydney. unref() so it never holds the process
+    // open on shutdown.
+    this.keepWarm = setInterval(() => void this.ping(), KEEP_WARM_MS);
+    this.keepWarm.unref();
   }
 
   async onModuleDestroy(): Promise<void> {
+    if (this.keepWarm) clearInterval(this.keepWarm);
     await this.sql.end({ timeout: 5 });
   }
 

@@ -26,6 +26,36 @@ import { ChatEvent, ChatService } from './chat.service';
 /** Longest question accepted. Generous for legal prose, bounded for the model bill. */
 const MAX_QUESTION_LENGTH = 4000;
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REQUEST_ID = /^[A-Za-z0-9-]{8,64}$/;
+
+/**
+ * An answer in progress, as far as Stop needs to know about it.
+ *
+ * In memory, in this process. The web service runs as one process (see
+ * ecosystem.config.js), so the request and the Stop for it always meet here;
+ * a second replica would need this in the database.
+ */
+interface RunningAsk {
+  userId: string;
+  threadId: string | null;
+  userMessageId: string | null;
+  /** Every message this turn wrote - the question and anything after it. */
+  messageIds: string[];
+  /** Stop was pressed before the answer was sent. */
+  stopped: boolean;
+  /** The answer, or the reason there is none, has been sent. Stop is too late. */
+  settled: boolean;
+}
+
+function track(run: RunningAsk, event: ChatEvent): void {
+  if (event.type === 'thread') run.threadId = event.threadId;
+  if (event.type === 'message' || event.type === 'answer') {
+    run.messageIds.push(event.message.id);
+    if (event.type === 'message' && event.message.role === 'user') run.userMessageId = event.message.id;
+  }
+}
+
 /**
  * The signed-in advocate's chat.
  *
@@ -37,6 +67,7 @@ const MAX_QUESTION_LENGTH = 4000;
 @UseGuards(UserAuthGuard)
 export class ChatController {
   private readonly logger = getLogger().child({ module: 'web:chat:http' });
+  private readonly running = new Map<string, RunningAsk>();
 
   constructor(
     private readonly chat: ChatService,
@@ -143,12 +174,19 @@ export class ChatController {
    */
   @Post('ask')
   async ask(
-    @Body() body: { threadId?: string; question?: string },
+    @Body() body: { threadId?: string; question?: string; requestId?: string; replaceMessageId?: string },
     @Req() req: WebRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
     const user = req.principal!.user;
     const question = (body?.question ?? '').trim();
+
+    // Only a real message id reaches the database, where it is cast to uuid -
+    // anything else would fail the cast and lose the question with it.
+    const replaceMessageId =
+      typeof body?.replaceMessageId === 'string' && UUID.test(body.replaceMessageId)
+        ? body.replaceMessageId
+        : null;
 
     if (!question) {
       reply.status(HttpStatus.BAD_REQUEST).send({
@@ -192,9 +230,33 @@ export class ChatController {
       reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     };
 
+    // Registered before the first await, so a Stop pressed at once still finds it.
+    const requestId = typeof body?.requestId === 'string' && REQUEST_ID.test(body.requestId) ? body.requestId : null;
+    const run: RunningAsk | null = requestId
+      ? { userId: user.id, threadId: null, userMessageId: null, messageIds: [], stopped: false, settled: false }
+      : null;
+    if (requestId && run) this.running.set(requestId, run);
+
     try {
-      for await (const event of this.chat.ask({ user, threadId: body?.threadId ?? null, question })) {
+      for await (const event of this.chat.ask({
+        user,
+        threadId: body?.threadId ?? null,
+        question,
+        replaceMessageId,
+        stopped: () => run?.stopped === true,
+      })) {
+        if (run) track(run, event);
+
+        // The advocate stopped this answer. The pipeline runs on to its end so
+        // that whatever it charged and wrote can be undone below, but nothing
+        // more of it is sent.
+        if (run?.stopped) continue;
+
         write(event);
+
+        // Once the answer - or the reason there is none - has been sent, Stop
+        // is too late: it was delivered, and undoing it would be a free answer.
+        if (run && (event.type === 'answer' || event.type === 'error')) run.settled = true;
       }
     } catch (err) {
       // ChatService handles its own failures and refunds; reaching here means
@@ -208,7 +270,43 @@ export class ChatController {
       });
     } finally {
       if (open) reply.raw.end();
+      if (requestId) this.running.delete(requestId);
     }
+
+    // The second pass - see ChatService.discardTurn. Whatever the abandoned
+    // answer charged or wrote after Stop is refunded and removed.
+    if (run?.stopped) {
+      await this.chat
+        .discardTurn({ user, threadId: run.threadId, userMessageId: run.userMessageId, messageIds: run.messageIds })
+        .catch((err) => this.logger.error({ err, userId: user.id }, 'Could not undo a stopped answer'));
+    }
+  }
+
+  /**
+   * Stop an answer that has not arrived yet.
+   *
+   * The question is removed and its credits refunded at once, so the advocate
+   * can edit it and send it again straight away into a clean thread. Refused
+   * once the answer has been sent: stopping then would be a free answer.
+   */
+  @Post('stop')
+  @HttpCode(HttpStatus.OK)
+  async stop(@Body() body: { requestId?: string }, @Req() req: WebRequest) {
+    const user = req.principal!.user;
+    const run = typeof body?.requestId === 'string' ? this.running.get(body.requestId) : undefined;
+
+    // Somebody else's request looks exactly like one that does not exist.
+    if (!run || run.userId !== user.id || run.settled) return { stopped: false };
+
+    run.stopped = true;
+    await this.chat.discardTurn({
+      user,
+      threadId: run.threadId,
+      userMessageId: run.userMessageId,
+      messageIds: [...run.messageIds],
+    });
+
+    return { stopped: true, credits: await this.credits.peek(user.id, user.role) };
   }
 
   // ---------------------------------------------------------------------------

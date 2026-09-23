@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { JSONValue } from 'postgres';
+import type { JSONValue, TransactionSql } from 'postgres';
 import { DatabaseService } from '../database.service';
 import { ChatMessageRow, ChatRole, ChatThreadRow, QueryIntent } from '../types';
 
@@ -29,11 +29,17 @@ export class ChatRepository {
     return row;
   }
 
-  /** The sidebar. Archived threads are excluded; nothing is hard-deleted here. */
+  /**
+   * The sidebar. Archived threads are excluded; nothing is hard-deleted here.
+   *
+   * Empty ones too: a thread whose only question was stopped has nothing to
+   * show, and listing it would put a conversation in the sidebar that opens
+   * onto a blank page.
+   */
   async listThreads(userId: string, limit = 100, offset = 0): Promise<ChatThreadRow[]> {
     return this.db.sql<ChatThreadRow[]>`
       SELECT * FROM chat_threads
-       WHERE user_id = ${userId} AND archived_at IS NULL
+       WHERE user_id = ${userId} AND archived_at IS NULL AND message_count > 0
        ORDER BY last_message_at DESC
        LIMIT ${limit} OFFSET ${offset}
     `;
@@ -196,6 +202,69 @@ export class ChatRepository {
       ORDER BY created_at
     `;
     return rows;
+  }
+
+  /**
+   * Take specific messages out of a thread - a turn the advocate stopped.
+   *
+   * Scoped by owner as well as thread, so an id that is not theirs deletes
+   * nothing. The counter moves in the same transaction, as it does on append,
+   * and a thread left with nothing in it goes back to "New chat" so the next
+   * question names it - the stopped one should not.
+   */
+  async deleteMessages(userId: string, threadId: string, messageIds: string[]): Promise<number> {
+    if (messageIds.length === 0) return 0;
+
+    return this.db.sql.begin(async (sql) => {
+      const removed = await sql<{ id: string }[]>`
+        DELETE FROM chat_messages
+         WHERE thread_id = ${threadId} AND user_id = ${userId}
+           AND id = ANY(${messageIds}::uuid[])
+     RETURNING id
+      `;
+      await this.afterRemoval(sql, userId, threadId, removed.length);
+      return removed.length;
+    });
+  }
+
+  /**
+   * Remove a question and everything after it - an edited question replaces
+   * the turn it was edited from.
+   *
+   * Anchored on a *user* message the caller owns: an id that is not one, or
+   * not theirs, matches no row, the comparison is against NULL, and nothing
+   * is deleted.
+   */
+  async deleteFromMessage(userId: string, threadId: string, messageId: string): Promise<number> {
+    return this.db.sql.begin(async (sql) => {
+      const removed = await sql<{ id: string }[]>`
+        DELETE FROM chat_messages
+         WHERE thread_id = ${threadId} AND user_id = ${userId}
+           AND created_at >= (
+             SELECT created_at FROM chat_messages
+              WHERE id = ${messageId}::uuid AND thread_id = ${threadId}
+                AND user_id = ${userId} AND role = 'user'
+           )
+     RETURNING id
+      `;
+      await this.afterRemoval(sql, userId, threadId, removed.length);
+      return removed.length;
+    });
+  }
+
+  private async afterRemoval(
+    sql: TransactionSql,
+    userId: string,
+    threadId: string,
+    count: number,
+  ): Promise<void> {
+    if (count === 0) return;
+    await sql`
+      UPDATE chat_threads
+         SET message_count = GREATEST(message_count - ${count}, 0),
+             title = CASE WHEN message_count - ${count} <= 0 THEN 'New chat' ELSE title END
+       WHERE id = ${threadId} AND user_id = ${userId}
+    `;
   }
 
   /** Admin: recent web conversations across all users. */

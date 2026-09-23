@@ -82,6 +82,29 @@ export class UserRepository {
     return row ?? null;
   }
 
+  /**
+   * The advocate editing their own profile, from the web.
+   *
+   * Every field is written as given - the caller has already merged in what
+   * was not changed - and the updated row comes back so the screen shows what
+   * was stored, not what was sent.
+   */
+  async updateProfile(
+    userId: string,
+    profile: { fullName: string | null; city: string | null; state: string | null },
+  ): Promise<UserRow | null> {
+    const [row] = await this.db.sql<UserRow[]>`
+      UPDATE users
+         SET full_name         = ${profile.fullName},
+             city              = ${profile.city},
+             bar_council_state = ${profile.state},
+             updated_at        = NOW()
+       WHERE id = ${userId}
+   RETURNING *
+    `;
+    return row ?? null;
+  }
+
   /** Profile fields captured during onboarding. */
   async setProfile(
     userId: string,

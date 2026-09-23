@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { RetrievedChunk } from '../database/types';
+import { ClassifiedIntent } from './intent.service';
 import { extractCitations, extractStatuteRefs } from './legal-patterns';
+import { LlmMessage } from './providers/llm-provider.interface';
 
 export interface GuardrailReport {
   /** The answer after removing anything that could not be verified. */
@@ -50,7 +52,7 @@ export class GuardrailsService {
 
   constructor(private readonly corpus: CorpusRepository) {}
 
-  async verify(answer: string, retrieved: RetrievedChunk[]): Promise<GuardrailReport> {
+  async verify(answer: string, retrieved: RetrievedChunk[], intent?: ClassifiedIntent, history: LlmMessage[] = []): Promise<GuardrailReport> {
     if (!answer.trim()) {
       return { text: answer, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null };
     }
@@ -67,6 +69,10 @@ export class GuardrailsService {
     for (const chunk of retrieved) {
       if (chunk.neutral_citation) grounded.add(this.normalise(chunk.neutral_citation));
       for (const reporter of chunk.reporter_citations ?? []) grounded.add(this.normalise(reporter));
+    }
+    for (const msg of history) {
+      const historyCitations = extractCitations(msg.content);
+      for (const cit of historyCitations) grounded.add(this.normalise(cit));
     }
 
     const [citationChecks, statuteChecks] = await Promise.all([
@@ -90,8 +96,16 @@ export class GuardrailsService {
     }
 
     const removedStatuteRefs: string[] = [];
+    const askedStatute = intent?.actCode && intent?.sectionNumber
+      ? `${intent.actCode} ${intent.sectionNumber}`.toUpperCase()
+      : null;
+
     for (const check of statuteChecks) {
       if (!check.found) {
+        if (askedStatute && check.ref === askedStatute) {
+          // The advocate specifically asked for this provision, so repeating it is not a hallucination.
+          continue;
+        }
         removed.push(check.ref);
         removedStatuteRefs.push(check.ref);
       }

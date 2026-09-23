@@ -56,13 +56,17 @@ export class AuthRepository {
     avatarUrl: string | null;
     source: AccountSource;
     emailVerified: boolean;
+    /** Where they practise - decides which High Court's judgments come first. */
+    state?: string | null;
+    city?: string | null;
   }): Promise<UserRow | null> {
     const [row] = await this.db.sql<UserRow[]>`
-      INSERT INTO users (email, password_hash, full_name, avatar_url, signup_source, email_verified_at, last_web_login_at)
+      INSERT INTO users (email, password_hash, full_name, avatar_url, signup_source, email_verified_at,
+                         last_web_login_at, bar_council_state, city)
            VALUES (${input.email}, ${input.passwordHash}, ${input.fullName}, ${input.avatarUrl},
                    ${input.source}::account_source,
                    ${input.emailVerified ? this.db.sql`NOW()` : null},
-                   NOW())
+                   NOW(), ${input.state ?? null}, ${input.city ?? null})
       ON CONFLICT DO NOTHING
         RETURNING *
     `;

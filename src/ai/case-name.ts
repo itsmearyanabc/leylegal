@@ -30,6 +30,8 @@
  * name", which is true and is a different claim.
  */
 
+import { withoutLengthRequest } from './summary-length';
+
 export interface CaseName {
   /** The party before the "vs". */
   petitioner: string;
@@ -73,6 +75,25 @@ const NOISE = new Set([
  */
 const LEAD_IN =
   /^(?:(?:the\s+)?(?:case|judgment|judgement|matter|decision|order|citation|ruling|law)\s+)+(?:(?:of|in|for|on|about|titled|named|regarding|re)\s+)*/i;
+
+/**
+ * "Give me a summary of X vs Y", "X vs Y ka summary do".
+ *
+ * Asking for a summary is how advocates ask about one named case, and the
+ * request was being read as part of it: the petitioner came out as "give me
+ * summary of Rajesh Kumar Mittal", which scores 0.5 against the real title and
+ * reported the case as not found. Both anchored, so a summary word in the
+ * middle of a name is left alone.
+ */
+const SUMMARY_LEAD_IN =
+  /^(?:(?:please|pls|plz|kindly|can|could|would|you|what|whats|what's|is|give|send|share|provide|show|tell|write|get|me|us|a|an|the|short|brief|detailed|quick|full|complete)\s+)*(?:summary|summarise|summarize|synopsis|gist)\s+(?:(?:of|for|on|about|regarding)\s+)?/i;
+
+const SUMMARY_TAIL =
+  /[\s,.;:-]+(?:(?:ka|ki|ke|kaa|with|and|give|me|a|short|brief|detailed|full)\s+)*(?:summary|summarise|summarize|synopsis|gist)(?:\s+(?:do|de|dedo|dijiye|batao|bataiye|chahiye|karo|kijiye|likho|please|pls|plz))*[\s.?!]*$/i;
+
+function withoutSummaryRequest(text: string): string {
+  return withoutLengthRequest(text).replace(SUMMARY_LEAD_IN, '').replace(SUMMARY_TAIL, '');
+}
 
 /**
  * The date Kanoon puts in its own titles, which advocates paste back verbatim.
@@ -122,7 +143,7 @@ export function extractCaseName(text: string): CaseName | null {
 
   // Trailing court and date qualifiers - "... . Patna High court", "... (2017)"
   // - are context for the search, not part of the name.
-  const withoutLeadIn = text
+  const withoutLeadIn = withoutSummaryRequest(text.trim())
     .trim()
     .replace(LEAD_IN, '')
     .replace(/[.,;]?\s*\(?\b(19|20)\d{2}\)?\s*$/, '');
@@ -131,6 +152,9 @@ export function extractCaseName(text: string): CaseName | null {
   const trimmed = withoutLeadIn
     .replace(TRAILING_COURT, '')
     .replace(TRAILING_DATE, '')
+    // Again, for "X vs Y summary (2017)", where the year was behind the
+    // summary word the first pass looked for.
+    .replace(SUMMARY_TAIL, '')
     .trim();
 
   const parts = trimmed.split(SEPARATOR);

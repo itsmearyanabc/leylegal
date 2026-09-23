@@ -13,13 +13,39 @@ import { CAVEAT, RETURN_TO_MENU } from '../whatsapp/replies';
 import { EmbeddingService } from './embedding.service';
 import { ClassifiedIntent } from './intent.service';
 import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName } from './case-name';
-import { expandQuery } from './legal-patterns';
+import { expandQuery, extractCitations } from './legal-patterns';
 import { buildCaseSummaryPrompt, buildPrincipleSummaryPrompt } from './prompts';
+import { DEFAULT_SUMMARY_WORDS, requestedWordCount, withoutLengthRequest } from './summary-length';
 import { parseJsonLoose } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
 
 /** Named so the extract builder below reads as prose rather than escapes. */
 const NEWLINE = '\n';
+
+/**
+ * Citation lists joined in order, duplicates dropped without regard to case or
+ * spacing - "AIR 1973 SUPREME COURT 1461" arrives from both the search result
+ * and the document, and printing it twice would read as two reports.
+ */
+function mergeCitations(...sources: (string[] | string | null | undefined)[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const source of sources) {
+    const list = Array.isArray(source) ? source : source ? [source] : [];
+    for (const raw of list) {
+      const citation = raw.replace(/\s+/g, ' ').trim();
+      if (!citation) continue;
+
+      const key = citation.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(citation);
+    }
+  }
+
+  return out;
+}
 
 /**
  * The better of the row's own excerpt and the judgment's opening.
@@ -55,65 +81,70 @@ function display(name: CaseName): string {
 }
 
 /**
- * What Indian Kanoon is actually asked.
+ * Every query worth sending to Indian Kanoon for this question, most specific
+ * first.
  *
- * ## Why a named case is not searched with the question around it
+ * ## Why a list, and why these operators
  *
- * Kanoon ranks by relevance over every word it is given. Handed "case law for
- * Rajesh Kumar Mittal vs State of Bihar in Patna High Court" - which is what
- * the router's rewrite produces - it is scoring "case", "law", "for", "in" and
- * "court" alongside the two things that identify the judgment. The signal is a
- * third of the string and the noise is the rest, and the case does not surface
- * even when Kanoon plainly has it.
+ * Kanoon's search API documents operators inside `formInput` for exactly the
+ * lookups advocates make, and this used to use none of them:
  *
- * When a cause title has been recognised, the parties are the query. Nothing
- * else in the sentence narrows anything.
+ *   title:  "a document will match only if those words and phrases are present
+ *            in the title of the document"
+ *   cite:   "restrict search to only documents that have a specific citation"
  *
- * The court comes along because it is the one remaining word that does narrow
- * something: Kanoon's `doctypes:` restriction is derived from phrases like
- * "Patna High Court", and applyCourtFilter needs to see them to add it. Drop
- * them and a High Court lookup silently becomes a search of everything.
+ * A named case was searched as free text over the parties, which ranks every
+ * judgment mentioning those words - so the case asked for competed with every
+ * other judgment against the same State. `title:` asks the question that was
+ * actually put: which document is *titled* this. A pasted citation was searched
+ * the same way, and `cite:` is the documented form for it.
  *
- * Anything that is not a cause title keeps the rewrite, which is what it is
- * for: "anticipatory bail after chargesheet" is better searched in the model's
- * legal vocabulary than in the advocate's.
+ * Each operator narrows, and a narrowing that matches nothing - a misspelled
+ * party, a citation Kanoon formats differently - must not become "no authority
+ * found". So each specific attempt is followed by a broader one, and the search
+ * stops at the first that answers the question.
+ *
+ * The court restriction is written before `title:` rather than after it. The
+ * documented operators run to the next operator, and a title operand followed by
+ * `doctypes:patna` could otherwise be read as a title containing "doctypes".
  */
-export function kanoonQuery(intent: ClassifiedIntent): string {
+export function kanoonQueries(intent: ClassifiedIntent): string[] {
+  const court = courtFilter(intent.rawText);
+  // "in 100 words" is about the reply. Left in, Kanoon scores judgments on it.
+  const searchQuery = withoutLengthRequest(intent.searchQuery);
+
+  // 1. A citation the advocate pasted. Unique on its own, so no court scope.
+  const citation = extractCitations(intent.rawText)[0];
+  if (citation) return unique([`cite: ${citation}`, searchQuery]);
+
+  // 2. A named case.
   const name = extractCaseName(intent.rawText);
-  if (name) return namedCaseQuery(name);
+  if (name) {
+    const parties = `${name.petitioner} ${name.respondent}`;
+    const scope = (name.court ? courtFilter(name.court) : null) ?? court;
+    return unique([
+      scope ? `doctypes:${scope} title: ${parties}` : `title: ${parties}`,
+      scope ? `${parties} doctypes:${scope}` : parties,
+      parties,
+    ]);
+  }
 
+  // 3. A provision, kept to the court the advocate named.
   const provision = provisionPhrase(intent);
-  if (provision) return provision;
+  if (provision) {
+    return unique([court ? `${provision} doctypes:${court}` : provision, searchQuery]);
+  }
 
-  return intent.searchQuery;
+  return [searchQuery];
 }
 
-/**
- * The parties, and the court as a filter rather than as words to match.
- *
- * ## Why the court's name cannot be left in the query
- *
- * It was, so that applyCourtFilter could see "Patna High Court" and add its
- * `doctypes:` restriction - and that put three tokens into the relevance text
- * which every judgment of that court also contains. Searching a Patna-only
- * result set for "Patna High court" scores nothing and crowds out the two words
- * that identify the case.
- *
- * The measured difference, on the same judgment:
- *
- *   "Rajesh Kumar Mittal State Of Bihar"                       -> found
- *   "Rajesh Kumar Mittal State of Bihar Patna High court ..."  -> not in ten
- *
- * So the slug is resolved here and appended as the operator alone. The court
- * still narrows the search; it just stops competing with the parties for rank.
- *
- * applyCourtFilter sees no "high court" phrase in what comes back and adds
- * nothing further, so the restriction is not applied twice.
- */
-function namedCaseQuery(name: CaseName): string {
-  const parties = `${name.petitioner} ${name.respondent}`;
-  const slug = name.court ? courtFilter(name.court) : null;
-  return slug ? `${parties} doctypes:${slug}` : parties;
+/** The first attempt - what Kanoon is asked before any fallback. */
+export function kanoonQuery(intent: ClassifiedIntent): string {
+  return kanoonQueries(intent)[0];
+}
+
+function unique(queries: string[]): string[] {
+  return queries.filter((query, index) => query && queries.indexOf(query) === index);
 }
 
 /**
@@ -193,6 +224,12 @@ export interface PrecedentSearchResult {
    * neither.
    */
   namedCase?: { name: string; found: boolean };
+  /**
+   * Set when the list is arranged by court - the advocate's High Court, then
+   * the Supreme Court, then the rest, newest first within each. Absent for a
+   * named case, which is one judgment wherever it was decided.
+   */
+  grouping?: { homeCourt: string | null };
   latencyMs: number;
 }
 
@@ -247,7 +284,23 @@ export class PrecedentsService {
     return this.settings.get('PRECEDENT_SOURCE') || this.env.PRECEDENT_SOURCE;
   }
 
-  async search(intent: ClassifiedIntent): Promise<PrecedentSearchResult> {
+  /**
+   * `homeState` decides which judgments are promoted, and it belongs here
+   * rather than at the call site.
+   *
+   * Both callers used to reorder the rows themselves, after this method
+   * returned - and this method enriches only the first page, because each
+   * document is a billed call. So the promotion moved home-court judgments from
+   * positions six to fifteen into positions one to three, and those are exactly
+   * the rows no document was ever fetched for.
+   *
+   * The advocate's own High Court binds them, so those are the cards they read
+   * first - and they were the cards with "Not available" for the case number,
+   * the bench and the citations, while the persuasive judgments below them were
+   * complete. Ordering has to happen before enrichment, which means it has to
+   * happen in here.
+   */
+  async search(intent: ClassifiedIntent, homeState?: string | null): Promise<PrecedentSearchResult> {
     const started = Date.now();
     const mode = this.source;
 
@@ -255,15 +308,40 @@ export class PrecedentsService {
     // so it is preferred when available. `auto` falls back to local on failure
     // rather than leaving the advocate with nothing.
     const useKanoon = mode === 'kanoon' || (mode === 'auto' && this.kanoon.isConfigured);
+    // "Summary in 100 words" - read from what was typed, not the rewrite.
+    const words = requestedWordCount(intent.rawText);
 
     if (useKanoon) {
       try {
-        const found = await this.searchKanoon(intent);
+        /*
+         * The advocate's own High Court and the Supreme Court are searched on
+         * their own, alongside the general search, not just picked out of it.
+         *
+         * Picking them out was all this did, and a general search returns ten
+         * judgments from anywhere in the country - often none from the one
+         * court whose decisions bind this advocate. A search restricted to that
+         * court finds them when they exist. Three Kanoon calls rather than
+         * one, in parallel so it costs no time, and each is cached.
+         */
+        const scoped = priorityQueries(intent, homeState);
+        const [found, homeRows, supremeRows] = await Promise.all([
+          this.searchKanoon(intent),
+          scoped?.home ? this.searchKanoonQuietly(scoped.home) : [],
+          scoped?.supreme ? this.searchKanoonQuietly(scoped.supreme) : [],
+        ]);
         const { precedents, namedCase } = this.forNamedCase(intent.rawText, found);
-        const enriched = await this.withPrinciples(await this.withHeaders(precedents));
+        // Promote first, enrich second. The other way round pays for documents
+        // the advocate will never see and leaves the top of the page empty.
+        const ordered = scoped
+          ? arrangeByCourt({ home: homeRows, supreme: supremeRows, general: precedents }, homeState, this.maxResults)
+          : prioritiseHomeCourt(precedents, homeState);
+        const enriched = await this.withPrinciples(await this.withHeaders(ordered), words);
         return {
-          precedents: namedCase?.found ? await this.withSummary(enriched) : enriched,
+          // With a length asked for, the SUMMARY line already is the summary at
+          // that length, and a second one under it would say the same again.
+          precedents: namedCase?.found && !words ? await this.withSummary(enriched) : enriched,
           namedCase,
+          grouping: scoped ? { homeCourt: homeCourtName(homeState) } : undefined,
           totalMatches: precedents[0]?.total_matches ?? precedents.length,
           // Kanoon runs its own relevance ranking; the local dense/lexical
           // distinction does not apply, so this is never a degraded state.
@@ -284,64 +362,77 @@ export class PrecedentsService {
       }
     }
 
-    return this.searchLocal(intent, started);
+    return this.searchLocal(intent, started, homeState, words);
   }
 
   /**
-   * Kanoon, asked the narrow question first and the broad one only if needed.
+   * Try each query in turn and stop at the first that answers the question.
    *
-   * The narrowed query is a phrase match - `"Order 32" "Civil Procedure"` - and
-   * phrase syntax is the one part of this that cannot be verified from here
-   * without an API key. If Kanoon does not honour the quotes, or the phrase
-   * genuinely appears in nothing it indexes, the result is zero rows, and zero
-   * rows reads to the advocate as "there is no authority on this" - which is a
-   * far worse answer than the loose one it replaced.
+   * "Answers" depends on the question. For a named case it means a result whose
+   * title is that case - ten results that are all somebody else is not an
+   * answer, however many there are. For anything else, any result at all.
    *
-   * So the broad query stays as a fallback. It costs one extra billed call, and
-   * only on a search that would otherwise have returned nothing at all.
+   * ## What happens when an attempt fails
+   *
+   * An attempt that throws is skipped, not fatal. The operators are documented
+   * but a malformed operand is still a failed call, and one bad attempt must not
+   * cost the advocate the broader search behind it. Only when every attempt
+   * throws is the error surfaced - which is what lets the `auto` source fall back
+   * to the local corpus, and lets a charge be refunded.
+   *
+   * When nothing answers, the narrowest non-empty result set is returned as the
+   * near misses: they came from the most specific question, so they are the
+   * closest to what was asked.
+   *
+   * Cost: a hit on the first attempt is one call, as before. Only a miss pays
+   * for the broader ones.
    */
   private async searchKanoon(intent: ClassifiedIntent): Promise<PrecedentRow[]> {
-    const narrow = kanoonQuery(intent);
-    const rows = await this.kanoon.search(narrow, this.maxResults);
-
-    /*
-     * A named case that ten results did not contain is not yet a missing case.
-     *
-     * "No judgment found named ..." is a strong thing to tell an advocate, and
-     * the first attempt is the narrow one - parties plus a court restriction.
-     * Either half can hide a judgment that is really there: the court may be
-     * misremembered, or filed under a bench Kanoon slugs differently. Dropping
-     * the restriction and asking for the parties alone costs one call and is
-     * the difference between "not in this court" and "not anywhere".
-     *
-     * Only on a miss, so an ordinary hit still costs exactly one search.
-     */
+    const attempts = kanoonQueries(intent);
     const name = extractCaseName(intent.rawText);
-    if (name) {
-      const hit = (candidates: PrecedentRow[]): boolean =>
-        candidates.some((row) => caseNameScore(name, row.case_title) >= CASE_NAME_MATCH);
 
-      const parties = `${name.petitioner} ${name.respondent}`;
-      if (!hit(rows) && parties !== narrow) {
+    const answers = (rows: PrecedentRow[]): boolean =>
+      name
+        ? rows.some((row) => caseNameScore(name, row.case_title) >= CASE_NAME_MATCH)
+        : rows.length > 0;
+
+    let nearest: PrecedentRow[] = [];
+    let failures = 0;
+    let lastError: unknown = null;
+
+    for (const query of attempts) {
+      try {
+        const rows = await this.kanoon.search(query, this.maxResults);
+        if (answers(rows)) return rows;
+        if (nearest.length === 0) nearest = rows;
+
         this.logger.info(
-          { narrow, retry: parties },
-          'Named case not in the narrowed results - retrying without the court restriction',
+          { query, results: rows.length, named: Boolean(name) },
+          'Kanoon attempt did not answer the question - trying the next',
         );
-        const wider = await this.kanoon.search(parties, this.maxResults);
-        // The wider set replaces the narrow one only if it actually found the
-        // case. Otherwise the narrow results are the better near misses.
-        if (hit(wider)) return wider;
+      } catch (err) {
+        failures += 1;
+        lastError = err;
+        this.logger.warn({ err, query }, 'Kanoon attempt failed - trying the next');
       }
-      return rows;
     }
 
-    if (rows.length > 0 || narrow === intent.searchQuery) return rows;
+    if (failures === attempts.length) throw lastError;
+    return nearest;
+  }
 
-    this.logger.info(
-      { narrow, falling_back_to: intent.searchQuery },
-      'Narrowed Kanoon query matched nothing - retrying with the rewritten question',
-    );
-    return this.kanoon.search(intent.searchQuery, this.maxResults);
+  /**
+   * One court-restricted search, for the home-court and Supreme Court passes.
+   * Those only add to the answer, so a failure costs them and nothing else:
+   * the general search still stands on its own.
+   */
+  private async searchKanoonQuietly(query: string): Promise<PrecedentRow[]> {
+    try {
+      return await this.kanoon.search(query, this.maxResults);
+    } catch (err) {
+      this.logger.warn({ err, query }, 'Court-restricted Kanoon search failed - the general results stand');
+      return [];
+    }
   }
 
   /**
@@ -350,8 +441,10 @@ export class PrecedentsService {
    * ## Why a second call per row is the only way
    *
    * Indian Kanoon's search response, captured live, is: authorid, bench,
-   * catids, docsize, docsource, doctype, fragment, headline, numcitedby,
-   * numcites, publishdate, tid, title. There is no case number in it, and
+   * catids, citation, docsize, docsource, doctype, fragment, headline,
+   * numcitedby, numcites, publishdate, tid, title - `citation` only on a
+   * reported judgment, and only the first of its citations. There is no case
+   * number in it, and
    * `bench` is `[888, 1990]` - author ids, not names, which is why BENCH read
    * "Not available" on every card whose `author` happened to be absent.
    *
@@ -382,7 +475,16 @@ export class PrecedentsService {
         if (tid === null) return;
 
         const header = await this.kanoon.documentHeader(tid);
-        if (!header.caseNumber && header.bench.length === 0 && !header.extract) return;
+        const citations = header.equivalentCitations ?? [];
+        if (
+          !header.caseNumber &&
+          (header.bench ?? []).length === 0 &&
+          !header.extract &&
+          citations.length === 0 &&
+          !header.neutralCitation
+        ) {
+          return;
+        }
 
         enriched[index] = {
           ...enriched[index],
@@ -395,20 +497,25 @@ export class PrecedentsService {
           bench: header.bench.length > 0 ? header.bench : enriched[index].bench,
           bench_strength: header.bench.length || enriched[index].bench_strength,
           /*
-           * The one citation an Indian judgment carries that nobody sells.
+           * EQUIVALENT CITATIONS, from every source Kanoon has.
            *
-           * EQUIVALENT CITATIONS has been empty on every card because AIR, SCC
-           * and PLJR are the products those reporters license, and Kanoon
-           * exposes none of them at either endpoint. Neutral citations are
-           * different: the courts assign them and print them in the judgment.
+           * The document's `doc_citations` heading first, because it is the
+           * complete list; then whatever the search result carried, which is
+           * only its first entry and is normally a duplicate; then the court's
+           * neutral citation, last, because an advocate reaches for AIR or SCC
+           * before a neutral one when both exist.
            *
-           * Only helps recent work. The scheme began at the Supreme Court in
-           * 2023 and the High Courts came in over 2023-24, so anything older
-           * has none and this stays "Not available" - correctly.
+           * This field was empty on every card for months, and was explained
+           * as impossible - Kanoon "exposes no citations". That was concluded
+           * from probing one unreported judgment. Reported ones carry them.
+           * An unreported judgment still reads "Not available", and that is now
+           * a statement about the judgment rather than about this code.
            */
-          reporter_citations: header.neutralCitation
-            ? [header.neutralCitation, ...(enriched[index].reporter_citations ?? [])]
-            : enriched[index].reporter_citations,
+          reporter_citations: mergeCitations(
+            citations,
+            enriched[index].reporter_citations,
+            header.neutralCitation,
+          ),
           /*
            * The judgment's own words, in place of a search snippet.
            *
@@ -482,8 +589,13 @@ export class PrecedentsService {
   }
 
   /** Hybrid dense + lexical search over the ingested Postgres corpus. */
-  private async searchLocal(intent: ClassifiedIntent, started: number): Promise<PrecedentSearchResult> {
-    const expanded = expandQuery(intent.searchQuery);
+  private async searchLocal(
+    intent: ClassifiedIntent,
+    started: number,
+    homeState?: string | null,
+    words?: number | null,
+  ): Promise<PrecedentSearchResult> {
+    const expanded = expandQuery(withoutLengthRequest(intent.searchQuery));
     const embedding = await this.embeddings.embedQuery(expanded);
 
     const precedents = await this.corpus.searchPrecedents({
@@ -508,9 +620,17 @@ export class PrecedentsService {
 
     const named = this.forNamedCase(intent.rawText, precedents);
 
+    // Ordered here too, so both sources hand back a list in the order it will
+    // be read and neither caller has to remember to do it. The corpus is one
+    // search, so the courts are arranged from what it returned.
+    const ordered = named.namedCase
+      ? prioritiseHomeCourt(named.precedents, homeState)
+      : arrangeByCourt({ home: [], supreme: [], general: named.precedents }, homeState, named.precedents.length);
+
     return {
-      precedents: await this.withPrinciples(named.precedents),
+      precedents: await this.withPrinciples(ordered, words),
       namedCase: named.namedCase,
+      grouping: named.namedCase ? undefined : { homeCourt: homeCourtName(homeState) },
       totalMatches: precedents[0]?.total_matches ?? precedents.length,
       lexicalOnly: !embedding,
       source: 'local',
@@ -596,7 +716,9 @@ export class PrecedentsService {
   }
 
   /**
-   * Fill in the LEGAL PRINCIPLE line for rows that have no authored one.
+   * Fill in the SUMMARY line (formerly LEGAL PRINCIPLE) for rows that have no
+   * authored one: what the case was about, then what it decided - at the
+   * length the advocate asked for, when they asked for one.
    *
    * ## Why this exists
    *
@@ -621,7 +743,7 @@ export class PrecedentsService {
    * nothing a model can add to the court's own words, and it would be a chance
    * to contradict them.
    */
-  private async withPrinciples(rows: PrecedentRow[]): Promise<PrecedentRow[]> {
+  private async withPrinciples(rows: PrecedentRow[], words?: number | null): Promise<PrecedentRow[]> {
     if (rows.length === 0 || this.registry.isRouterMocked) return rows;
 
     const needed = rows
@@ -657,12 +779,16 @@ export class PrecedentsService {
     }
 
     try {
+      // Facts and a holding need more of the judgment than a holding alone
+      // did, and a requested length more again. The Kanoon extract stops at
+      // 2,000 characters, so that is the ceiling either way.
+      const extractChars = words ? 2_000 : 1_500;
       const extracts = needed
         .map(({ row }, n) =>
           [
             `${n + 1}. ${row.case_title}`,
             row.court_name ? `Court: ${row.court_name}` : '',
-            `Extract: ${(row.best_excerpt || '').replace(/\s+/g, ' ').slice(0, 900)}`,
+            `Extract: ${(row.best_excerpt || '').replace(/\s+/g, ' ').slice(0, extractChars)}`,
           ]
             .filter(Boolean)
             .join(NEWLINE),
@@ -671,10 +797,13 @@ export class PrecedentsService {
 
       const result = await this.registry.complete({
         task: 'router',
-        system: buildPrincipleSummaryPrompt(),
+        system: buildPrincipleSummaryPrompt(words),
         messages: [{ role: 'user', content: extracts }],
         json: true,
-        maxTokens: 900,
+        // Sized to what was asked for. A fixed 900 held ten forty-word entries
+        // and truncated the JSON - losing every entry, not just the last - the
+        // moment somebody asked for a hundred.
+        maxTokens: summaryTokenBudget(needed.length, words),
       });
 
       const parsed = parseJsonLoose<{ principles?: { n?: number; principle?: string }[] }>(result.text);
@@ -787,12 +916,14 @@ export function splitParties(title: string): { petitioner: string | null; respon
  * likely to notice.
  */
 const HIGH_COURT_BY_STATE: Record<string, string> = {
+  'andaman and nicobar islands': 'calcutta high court',
   'andhra pradesh': 'andhra pradesh high court',
   'arunachal pradesh': 'gauhati high court',
   assam: 'gauhati high court',
   bihar: 'patna high court',
   chandigarh: 'punjab & haryana high court',
   chhattisgarh: 'chhattisgarh high court',
+  'dadra and nagar haveli and daman and diu': 'bombay high court',
   delhi: 'delhi high court',
   goa: 'bombay high court',
   gujarat: 'gujarat high court',
@@ -803,6 +934,7 @@ const HIGH_COURT_BY_STATE: Record<string, string> = {
   karnataka: 'karnataka high court',
   kerala: 'kerala high court',
   ladakh: 'jammu & kashmir high court',
+  lakshadweep: 'kerala high court',
   'madhya pradesh': 'madhya pradesh high court',
   maharashtra: 'bombay high court',
   manipur: 'manipur high court',
@@ -859,6 +991,144 @@ export function prioritiseHomeCourt(
   return [...promoted, ...rest];
 }
 
+/** "Karnataka High Court", for saying so on the page. */
+export function homeCourtName(state: string | null | undefined): string | null {
+  const court = homeHighCourt(state);
+  return court ? court.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : null;
+}
+
+/**
+ * Kanoon's name for the advocate's High Court - "karnataka", "punjab",
+ * "allahabad,lucknow" - or null for a court Kanoon does not document.
+ */
+export function homeCourtSlug(state: string | null | undefined): string | null {
+  const court = homeHighCourt(state);
+  return court ? courtFilter(court) : null;
+}
+
+/**
+ * The extra searches a topic question gets: the advocate's High Court, and
+ * the Supreme Court.
+ *
+ * None for a pasted citation or a named case - that is one judgment, wherever
+ * it was decided. None when the advocate named a court themselves: "Patna
+ * High Court judgments on bail" asked for Patna, and adding Karnataka to it
+ * would be answering a different question.
+ */
+export function priorityQueries(
+  intent: ClassifiedIntent,
+  state: string | null | undefined,
+): { home: string | null; supreme: string } | null {
+  if (extractCitations(intent.rawText)[0] || extractCaseName(intent.rawText)) return null;
+  if (courtFilter(intent.rawText)) return null;
+
+  const base = provisionPhrase(intent) ?? withoutLengthRequest(intent.searchQuery).trim();
+  if (!base) return null;
+
+  const slug = homeCourtSlug(state);
+  return {
+    home: slug ? `${base} doctypes:${slug}` : null,
+    supreme: `${base} doctypes:supremecourt`,
+  };
+}
+
+/**
+ * The order an advocate reads authority in: their own High Court first, then
+ * the Supreme Court, then everything else - newest first within each, by the
+ * DATE OF JUDGMENT on the card.
+ *
+ * Their High Court binds them and the Supreme Court binds everyone; the rest
+ * is persuasive. A single newest-first list mixes the three and leaves the
+ * advocate to sort them.
+ *
+ * ## Why each group has a share rather than the whole page
+ *
+ * Ten results, and the home court alone can fill them. Four from it, three
+ * from the Supreme Court and three from elsewhere is the default split, and
+ * any share a group cannot fill passes to the others in the same order - so a
+ * court with nothing on the question costs no space, and a page is never
+ * short while anything is left to show.
+ *
+ * A judgment found by more than one search appears once, in its highest group.
+ */
+export function arrangeByCourt(
+  sources: { home: PrecedentRow[]; supreme: PrecedentRow[]; general: PrecedentRow[] },
+  state: string | null | undefined,
+  max: number,
+): PrecedentRow[] {
+  const homeName = homeHighCourt(state);
+  const homeSlug = homeCourtSlug(state);
+
+  const isHome = (row: PrecedentRow): boolean => {
+    const court = (row.court_name ?? '').toLowerCase();
+    if (!court || !homeName) return false;
+    // Kanoon spells some courts its own way - "Chattisgarh", "Punjab-Haryana" -
+    // so the court's search slug is compared as well as its name.
+    return court.includes(homeName) || (homeSlug !== null && courtFilter(court) === homeSlug);
+  };
+  const isSupreme = (row: PrecedentRow): boolean => /\bsupreme court\b/i.test(row.court_name ?? '');
+
+  const home: PrecedentRow[] = [];
+  const supreme: PrecedentRow[] = [];
+  const rest: PrecedentRow[] = [];
+  const seen = new Set<string>();
+
+  const place = (row: PrecedentRow, group: PrecedentRow[]): void => {
+    if (seen.has(row.judgment_id)) return;
+    seen.add(row.judgment_id);
+    group.push(row);
+  };
+
+  // Every judgment goes where its own court puts it, whichever search found
+  // it. The court-restricted searches are trusted only for a row that names no
+  // court - a scope that leaks would otherwise put a stranger's judgment first.
+  const sort = (row: PrecedentRow, scope: PrecedentRow[] | null): PrecedentRow[] =>
+    isHome(row) ? home : isSupreme(row) ? supreme : !row.court_name && scope ? scope : rest;
+  for (const row of sources.home) place(row, sort(row, home));
+  for (const row of sources.supreme) place(row, sort(row, supreme));
+  for (const row of sources.general) place(row, sort(row, null));
+
+  const groups = [home, supreme, rest].map(byJudgmentDate);
+  const shares = [Math.ceil(max * 0.4), Math.ceil(max * 0.3), max];
+  const taken = groups.map((group, i) => Math.min(group.length, shares[i]));
+
+  // Hand what a group could not use to the others, in order.
+  let spare = max - taken.reduce((sum, n) => sum + n, 0);
+  for (let i = 0; i < groups.length && spare > 0; i++) {
+    const more = Math.min(groups[i].length - taken[i], spare);
+    if (more > 0) {
+      taken[i] += more;
+      spare -= more;
+    }
+  }
+
+  // The total can exceed max only through the rest group's share, which is
+  // bounded by what is left after the first two.
+  const rows = groups.flatMap((group, i) => group.slice(0, taken[i]));
+  return rows.slice(0, max);
+}
+
+/**
+ * How the list is ordered, in words - so the advocate knows the first card is
+ * first because of its court, and not because it is the newest.
+ */
+export function orderingNote(grouping: { homeCourt: string | null } | undefined): string {
+  if (!grouping) return 'newest first';
+  return grouping.homeCourt
+    ? `${grouping.homeCourt} first, then the Supreme Court, then other courts — newest first within each`
+    : 'Supreme Court first, then other courts — newest first within each';
+}
+
+/** Newest first by date of judgment; undated last. A copy, never in place. */
+function byJudgmentDate(rows: PrecedentRow[]): PrecedentRow[] {
+  const time = (row: PrecedentRow): number => {
+    if (!row.judgment_date) return Number.NEGATIVE_INFINITY;
+    const at = new Date(row.judgment_date).getTime();
+    return Number.isNaN(at) ? Number.NEGATIVE_INFINITY : at;
+  };
+  return [...rows].sort((a, b) => time(b) - time(a));
+}
+
 function year(date: Date | null): string {
   if (!date) return 'date unknown';
   const d = date instanceof Date ? date : new Date(date);
@@ -891,7 +1161,20 @@ export function synopsis(p: PrecedentRow, limit = 260): string {
 }
 
 /**
- * The line under LEGAL PRINCIPLE, or nothing at all.
+ * Output tokens for one summariser call: the words asked for, per entry, with
+ * room for the JSON around them. About 1.5 tokens a word in English; 2 leaves
+ * slack for names and Hinglish.
+ */
+export function summaryTokenBudget(entries: number, words?: number | null): number {
+  const perEntry = (words ?? DEFAULT_SUMMARY_WORDS) * 2;
+  return Math.min(8_000, 300 + entries * perEntry);
+}
+
+/** About 350 words: well past any length the prompt asks for. */
+const GENERATED_SUMMARY_CEILING = 2_400;
+
+/**
+ * The line under SUMMARY, or nothing at all.
  *
  * ## Why this can return null
  *
@@ -920,8 +1203,13 @@ export function legalPrinciple(p: PrecedentRow, limit = 200): string | null {
   // Written by the model from this row's own extract, and only where the row
   // states no principle of its own - see PrecedentsService.withPrinciples().
   // Ranked below the court's words and above our own salvage attempt.
+  //
+  // Not held to `limit`. That cut every one at 200 characters - about thirty
+  // words - so a summary written to the length the advocate asked for arrived
+  // with its second half missing. The model was given the length; the ceiling
+  // here only guards against one that ignored it.
   const generated = (p.generated_principle || '').replace(/\s+/g, ' ').trim();
-  if (generated) return stripEllipsis(synopsis({ ...p, best_excerpt: generated }, limit));
+  if (generated) return stripEllipsis(synopsis({ ...p, best_excerpt: generated }, GENERATED_SUMMARY_CEILING));
 
   // The summariser read the extract and said it states no principle. Printing
   // that extract anyway - which is what the salvage below does - shows the
@@ -982,6 +1270,7 @@ export function formatPrecedentPage(
     lexicalOnly?: boolean;
     source?: 'local' | 'kanoon';
     namedCase?: { name: string; found: boolean };
+    grouping?: { homeCourt: string | null };
   } = {},
 ): string {
   if (all.length === 0) {
@@ -1034,7 +1323,7 @@ export function formatPrecedentPage(
             `*Case law — ${all.length} precedent${all.length === 1 ? '' : 's'}*`,
             `_${query}_`,
             '',
-            `Showing ${offset + 1}–${shownTo} of ${all.length}, newest first.`,
+            `Showing ${offset + 1}–${shownTo} of ${all.length}, ${orderingNote(opts.grouping)}.`,
           ];
 
   if (opts.lexicalOnly) {
@@ -1113,11 +1402,11 @@ export function formatPrecedentPage(
       // "Not available" rather than the document's own header standing in for a
       // holding. Every word of that header is true and it is not what the case
       // decided, which is the one thing this line claims to be.
-      line('LEGAL PRINCIPLE', principle),
+      line('SUMMARY', principle),
       // Only ever present on a judgment asked for by name - see withSummary.
-      // Below the principle rather than above it, because the principle is the
-      // line an advocate reads first and the summary is what they read next.
-      ...(p.generated_summary ? ['', `SUMMARY: ${p.generated_summary}`] : []),
+      // Below the short summary rather than above it, because that is the line
+      // an advocate reads first and this is what they read next.
+      ...(p.generated_summary ? ['', `FULL SUMMARY: ${p.generated_summary}`] : []),
     ].join(NEWLINE);
   });
 

@@ -1,4 +1,5 @@
 import { RetrievedChunk, StatuteRow } from '../database/types';
+import { DEFAULT_SUMMARY_WORDS } from './summary-length';
 
 /**
  * Prompt templates.
@@ -22,16 +23,16 @@ Return ONLY a JSON object with exactly these keys:
   "cnr_number": the 16-character CNR if one is present, else null,
   "section_number": the statutory section number if one is named (e.g. "302", "498A", "156(3)"), else null,
   "act_code": one of "IPC" | "BNS" | "CRPC" | "BNSS" | "IEA" | "BSA" if an act is named or clearly implied, else null,
-  "search_query": the user's information need, rewritten in clear English legal terminology suitable for search,
+  "search_query": the user's information need, rewritten in clear English legal terminology suitable for search (incorporate context from previous turns if it is a follow-up question). DO NOT expand acronyms like BNS, BNSS, IPC, CRPC, etc.,
   "confidence": a number between 0 and 1
 }
 
 Intent guidance:
 - CASE_STATUS: asking about the status, next hearing date, or details of a specific case, usually with a CNR or case number.
 - SECTION_LOOKUP: asking what a statutory provision says, its punishment, or whether it is bailable/cognizable. This includes Orders and Rules of the Civil Procedure Code - "Order 32 CPC", "O.37 R.3" - which are provisions, not judgments. The word "order" there does not mean a court order.
-- PRECEDENT_SEARCH: looking for case law, judgments, rulings or precedents on a legal question.
+- PRECEDENT_SEARCH: looking for case law, judgments, rulings or precedents on a legal question - or asking about one specific judgment by name: its summary, facts, holding or ratio (e.g. "summary of Vishaka vs State of Rajasthan", "Arnesh Kumar v State of Bihar ka summary 100 words me").
 - DRAFTING_HELP: asking for help drafting a notice, petition, application or affidavit.
-- GENERAL_LEGAL: a legal question that needs no corpus lookup.
+- GENERAL_LEGAL: a legal question that needs no corpus lookup, or a follow-up that refers back to an earlier answer without naming a case (e.g. "summary of the case", "details of case") and can be answered from the conversational context. A summary of a case named in the message itself is PRECEDENT_SEARCH.
 - SMALL_TALK: greetings, thanks, acknowledgements.
 - MENU_NAVIGATION: "menu", "help", "start", "options".
 - UNSUPPORTED: not a legal query, or outside Indian law.
@@ -118,7 +119,20 @@ ${statutes.length > 0 ? `STATUTORY PROVISIONS (the ONLY sections you may cite):\
 Answer the advocate's question using only the material above. Where a passage supports your answer, cite the case. Where the material is insufficient, say so.`;
 }
 
-export function buildSectionExplanationPrompt(statutes: StatuteRow[], language: string): string {
+export function buildSectionExplanationPrompt(
+  statutes: StatuteRow[],
+  language: string,
+  /**
+   * The provision as the advocate named it - "Section 103 BNS".
+   *
+   * Needed because the material below is often filed under the *other* code.
+   * The corpus is built around the 2023 recodification: IPC rows carry their
+   * BNS equivalent, and a BNS lookup reaches them through that mapping. Handed
+   * IPC 302's row with no idea that BNS 103 was the question, the model
+   * answered about the IPC - which is exactly what was reported.
+   */
+  asked: string | null = null,
+): string {
   return `${VAKEEL_PERSONA}
 
 ${ANTI_HALLUCINATION_RULES}
@@ -138,6 +152,11 @@ Explain the provision the advocate asked about, in AT MOST 200 words, using exac
 *PRACTICAL USE:* when an advocate actually reaches for this section.
 
 If the provision has a corresponding section in the BNS or BNSS, state the mapping inside SUMMARY - it is the most common follow-up since the 2023 recodification.
+${
+  asked
+    ? `The advocate asked about *${asked}*. Answer about that provision. The material above may be filed under the other code - the corpus records the 2023 recodification as a mapping on the older section - so if what you were given is the corresponding section rather than the one they named, open SECTION with the provision they asked about, give the mapping in the same line, and explain the provision on that footing. Do not silently answer about the other code.`
+    : ''
+}
 
 Do not add a closing caveat or a sign-off; both are appended after you.`;
 }
@@ -164,7 +183,8 @@ export function buildDisambiguationPrompt(sectionNumber: string, acts: string[])
 export function buildGeneralLegalPrompt(language: string): string {
   return `${VAKEEL_PERSONA}
 
-You have no retrieved case law or statutory text for this question, so:
+You have no newly retrieved case law or statutory text for this question. However, if the conversational history contains case law, statutes, or case status information that answers the user's question (e.g. for follow-up questions), you MUST use it and you MAY cite it.
+Otherwise:
 - Do not cite any case. Do not state any section number you were not given.
 - Answer at the level of general legal principle, which is genuinely useful on its own.
 - Add ONE short line noting it is unverified against the corpus - and only when you have actually stated a proposition of law. Do NOT append it to a greeting, a clarifying question, or an explanation of what you can do. A caveat on every message is noise, and advocates stop reading it.
@@ -232,17 +252,30 @@ ${languageInstruction(language)}`;
  * One call for the whole page rather than one per judgment: ten round trips on
  * the router model would cost more latency than the retrieval they describe.
  */
-export function buildPrincipleSummaryPrompt(): string {
+export function buildPrincipleSummaryPrompt(words?: number | null): string {
+  /*
+   * The length the advocate asked for, as a number parsed from their message -
+   * never the message itself. See ai/summary-length.ts.
+   *
+   * "Do not pad" is what keeps a requested length from becoming a licence to
+   * invent: a 900-character extract cannot honestly fill 300 words, and the
+   * shortfall is correct.
+   */
+  const length = words
+    ? `- The advocate asked for a summary of about ${words} words. Write close to ${words} words for each entry - this is their explicit request, so do not cut it short to be concise. Reach the length by covering more of what the extract says (the facts, the question in issue, the arguments, the reasoning, the outcome), never by padding or repeating. If an extract genuinely does not contain enough to reach ${words} words, stop at what it supports.`
+    : `- Two to four sentences, at most ${DEFAULT_SUMMARY_WORDS} words per entry.`;
+
   return `You summarise Indian judgments for practising advocates.
 
-You will be given numbered extracts. For each one, write the LEGAL PRINCIPLE: one or two lines stating what that extract actually says the court decided or held.
+You will be given numbered extracts. For each one, write a SUMMARY that tells the advocate what the case was: first what the dispute or proceeding was about, then the legal principle the court decided or held, as far as the extract states it.
 
 Absolute rules:
 - Use ONLY the extract given for that number. Never use anything you happen to know about the case, the parties or the court.
-- If the extract is only a title, a date, a judge's name, a case number or procedural boilerplate - anything that does not state what was decided - return exactly "NONE" for that number. This is the correct answer far more often than you expect, and guessing is the one thing that makes this feature dangerous.
+- If the extract does not say how the case was decided, describe only what it does say. Never guess an outcome or a principle.
+- If the extract is only a title, a date, a judge's name, a case number or procedural boilerplate - anything that says nothing about what the case was or what was decided - return exactly "NONE" for that number. This is the correct answer far more often than you expect, and guessing is the one thing that makes this feature dangerous.
 - Never name a section, a statute or another case unless that name appears in the extract.
-- No preamble, no "the court held that" padding, no hedging. State the principle.
-- Maximum 40 words per entry.
+- No preamble, no "this case concerns" or "the court held that" padding, no hedging. State it directly.
+${length}
 
 Reply with JSON only, no code fence:
 {"principles":[{"n":1,"principle":"..."},{"n":2,"principle":"NONE"}]}`;

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { QueryIntent } from '../database/types';
+import { extractCaseName } from './case-name';
 import { isAcknowledgement, isMenuWord } from './conversational';
 import {
   ActCode,
@@ -11,7 +12,7 @@ import {
   normaliseActCode,
 } from './legal-patterns';
 import { INTENT_CLASSIFIER_SYSTEM } from './prompts';
-import { parseJsonLoose } from './providers/llm-provider.interface';
+import { LlmMessage, parseJsonLoose } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
 
 export interface ClassifiedIntent {
@@ -63,7 +64,7 @@ export class IntentService {
 
   constructor(private readonly registry: ProviderRegistry) {}
 
-  async classify(text: string): Promise<ClassifiedIntent> {
+  async classify(text: string, history: LlmMessage[] = []): Promise<ClassifiedIntent> {
     // Deterministic extraction first. A CNR or section number found by regex is
     // more reliable than one transcribed by a model, and it gives us a correct
     // answer even if the LLM call fails entirely.
@@ -90,7 +91,7 @@ export class IntentService {
       const result = await this.registry.complete({
         task: 'router',
         system: INTENT_CLASSIFIER_SYSTEM,
-        messages: [{ role: 'user', content: text }],
+        messages: [...history.slice(-4), { role: 'user', content: text }],
         json: true,
         maxTokens: 512,
       });
@@ -131,6 +132,21 @@ export class IntentService {
     }
     if (regexOrder && !classified.sectionNumber) classified.sectionNumber = regexOrder;
     if (regexOrder?.startsWith('Article') && !classified.actCode) classified.actCode = 'COI';
+
+    /*
+     * A summary of a named judgment is a judgment search.
+     *
+     * "summary of Vishaka vs State of Rajasthan in 100 words" was classified
+     * GENERAL_LEGAL and answered from the model's own memory of the case,
+     * signed off "unverified against the corpus". The search finds the
+     * judgment itself and summarises what it actually says - the one thing a
+     * model recalling a famous case is least reliable at. The router is told
+     * this too; the rule is here because a router that forgets it costs an
+     * advocate an unverified answer.
+     */
+    if (classified.intent === 'GENERAL_LEGAL' && asksAboutNamedJudgment(text)) {
+      classified.intent = 'PRECEDENT_SEARCH';
+    }
 
     return classified;
   }
@@ -287,6 +303,24 @@ export class IntentService {
       confidence: 0.3,
     };
   }
+}
+
+/**
+ * Is this a request about one named judgment - its summary, facts or holding?
+ *
+ * Two things must both be true. The message names a case, and it asks for
+ * what a judgment says. The second is what keeps prose out: "bail vs
+ * anticipatory bail" parses as a cause title, and sending it to a name lookup
+ * would answer a legal question with "no judgment found by that name".
+ */
+export function asksAboutNamedJudgment(text: string): boolean {
+  if (!extractCaseName(text)) return false;
+  return (
+    /\b(summary|summari[sz]e|synopsis|gist|ratio|holding|facts|saar)\b/i.test(text) ||
+    // No \b here: JavaScript's word boundary does not see Devanagari letters.
+    /सारांश/.test(text) ||
+    /\b(case|judg(?:e)?ment|decision|ruling)\s+(?:of|in|titled)\b/i.test(text)
+  );
 }
 
 /**

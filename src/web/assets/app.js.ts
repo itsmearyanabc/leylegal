@@ -95,17 +95,31 @@ const post = (path, payload) => api(path, { method: 'POST', body: JSON.stringify
 
 async function boot() {
   applyStoredTheme();
+  watchPasswordFields();
 
-  try {
-    state.config = await api('/api/auth/config');
-  } catch (_) {
-    state.config = { google: false, emailRecovery: false, passwordMinLength: 10, payments: false };
-  }
+  const path = location.pathname;
+  const tokenScreen = path === '/app/reset-password' || path === '/app/verify-email';
+
+  /*
+   * All three at once.
+   *
+   * They were fetched one after another - config, then the session, then the
+   * conversation list - and each of the last two waits on a database in
+   * Sydney. In sequence that was most of the pause behind "Dashboard", spent
+   * on a blank page. None depends on another's answer: a signed-out visitor's
+   * session and threads calls simply fail, and are ignored.
+   */
+  const configLoad = api('/api/auth/config').catch(() => (
+    { google: false, emailRecovery: false, passwordMinLength: 10, payments: false }
+  ));
+  const sessionLoad = tokenScreen ? null : api('/api/auth/me').catch(() => null);
+  const threadsLoad = tokenScreen ? null : loadThreadList();
+
+  state.config = await configLoad;
 
   // Standalone token screens are reachable while signed out and must be handled
   // before the session check, or an advocate resetting a forgotten password is
   // bounced to the sign-in form they cannot get past.
-  const path = location.pathname;
   if (path === '/app/reset-password') return renderResetPassword();
   if (path === '/app/verify-email')  return renderVerifyEmail();
 
@@ -119,12 +133,20 @@ async function boot() {
     history.replaceState({}, '', '/app');
   }
 
+  const me = await sessionLoad;
+  if (!me) return renderAuth();
+
   try {
-    await loadSession();
-    await enterApp();
+    applySession(me);
+    await enterApp(threadsLoad);
   } catch (_) {
     renderAuth();
   }
+}
+
+/** The conversation list, or null when it cannot be had - never a rejection. */
+function loadThreadList() {
+  return api('/api/chat/threads').catch(() => null);
 }
 
 /**
@@ -140,10 +162,89 @@ async function boot() {
  * tests by refreshing.
  */
 async function loadSession() {
-  const me = await api('/api/auth/me');
+  applySession(await api('/api/auth/me'));
+}
+
+function applySession(me) {
   state.user = me.user;
   state.credits = me.credits;
   state.capabilities = me.capabilities;
+}
+
+/**
+ * Put a button into its working state, and hand back the way out of it.
+ *
+ * A form that went quiet for a second after "Sign in" read as broken - there
+ * was nothing on screen to say anything was happening. The label changes and
+ * a spinner turns, and the original returns on failure.
+ */
+function buttonBusy(button, label) {
+  if (!button) return () => {};
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.classList.add('busy');
+  button.innerHTML = '<span class="spinner" aria-hidden="true"></span>' + esc(label);
+  return () => {
+    button.disabled = false;
+    button.classList.remove('busy');
+    button.innerHTML = original;
+  };
+}
+
+// ============================================================================
+// Show / hide password
+// ============================================================================
+
+const ICON_EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const ICON_EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 8 10 8a17.6 17.6 0 0 1-2.16 3.19"/>' +
+  '<path d="M6.61 6.61A17.4 17.4 0 0 0 2 12s3.5 8 10 8a9.7 9.7 0 0 0 5.39-1.61"/>' +
+  '<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="M2 2l20 20"/></svg>';
+
+/**
+ * An eye on every password field, on every screen.
+ *
+ * Watched for rather than added screen by screen: passwords are asked for on
+ * sign-in, sign-up, both reset flows and the account screen, and a field added
+ * to a sixth place later should get the eye without anyone remembering to.
+ */
+function watchPasswordFields() {
+  const scan = (root) => {
+    if (root.matches && root.matches('input[type="password"]')) addPasswordToggle(root);
+    if (root.querySelectorAll) root.querySelectorAll('input[type="password"]').forEach(addPasswordToggle);
+  };
+  scan(document.body);
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) if (node.nodeType === 1) scan(node);
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
+function addPasswordToggle(input) {
+  if (input.dataset.eye) return;
+  input.dataset.eye = '1';
+
+  const wrap = el('div', 'pw-wrap');
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  // type=button, so it can never submit the form it sits in.
+  const toggle = el('button', 'pw-toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-label', 'Show password');
+  toggle.innerHTML = ICON_EYE;
+  toggle.onclick = () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    toggle.innerHTML = show ? ICON_EYE_OFF : ICON_EYE;
+    toggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    input.focus();
+  };
+  wrap.appendChild(toggle);
 }
 
 // ============================================================================
@@ -186,10 +287,9 @@ function renderAuth() {
       '<form id="auth-form">' +
         (signup ? field('fullName', 'Full name', 'text', 'As it appears on your enrolment') : '') +
         field('email', 'Email', 'email', 'you@example.com') +
-        (signup ? field('phoneNumber', 'WhatsApp number', 'tel',
-                        'With country code, e.g. 919876543210. We send a code here.') : '') +
         field('password', 'Password', 'password',
               signup ? 'At least ' + state.config.passwordMinLength + ' characters' : '') +
+        (signup ? practiceFields('f', null, null, true) : '') +
         '<button class="btn block" type="submit">' +
           (signup ? 'Create account' : 'Sign in') +
         '</button>' +
@@ -219,8 +319,8 @@ function renderAuth() {
 
   $('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
-    const button = $('#auth-form button');
-    button.disabled = true;
+    const restore = buttonBusy($('#auth-form button[type="submit"]'),
+                              signup ? 'Creating your account…' : 'Signing in…');
     showAuthError('');
 
     try {
@@ -230,26 +330,30 @@ function renderAuth() {
       };
       if (signup) {
         payload.fullName = $('#f-fullName').value.trim();
-        payload.phoneNumber = $('#f-phoneNumber').value.trim();
+        if ($('#f-state')) payload.state = $('#f-state').value;
+        if ($('#f-city')) payload.city = $('#f-city').value.trim();
       }
 
-      const result = await post(signup ? '/api/auth/signup' : '/api/auth/login', payload);
+      await post(signup ? '/api/auth/signup' : '/api/auth/login', payload);
 
-      // Signing up leaves the account behind the verification gate, so it goes
-      // to the code screen rather than into the app. The session cookie is
-      // already set - that is what lets the verify call authenticate.
-      if (signup) return renderVerifyPhone(result && result.verification);
-
-      // The session cookie is set by the response above; everything the app
-      // needs comes from one place so the two entry paths cannot diverge again.
+      /*
+       * Both paths enter the app the same way.
+       *
+       * Signing up used to divert to a code-entry screen, for a code signup no
+       * longer sends - while the session cookie in that same response had
+       * already signed the advocate in. The screen said "verify to continue"
+       * and the cookie said "you are in".
+       *
+       * The session cookie is set by the response above; everything the app
+       * needs comes from one place so the two entry paths cannot diverge again.
+       * The conversation list is asked for alongside it rather than after.
+       */
+      const threadsLoad = loadThreadList();
       await loadSession();
-      await enterApp();
+      await enterApp(threadsLoad);
     } catch (err) {
-      // An existing account that predates verification lands here on sign-in:
-      // the credentials are right and the gate is still down.
-      if (err.code === 'PHONE_UNVERIFIED') return renderVerifyPhone(null);
       showAuthError(err.message);
-      button.disabled = false;
+      restore();
     }
   };
 }
@@ -267,6 +371,34 @@ function field(name, label, type, hint) {
     (hint ? '<div class="hint">' + esc(hint) + '</div>' : '') + '</div>';
 }
 
+/**
+ * Where the advocate practises: a state from the list, and a city.
+ *
+ * The state is what puts their own High Court's judgments first in a case-law
+ * search, so it is a list rather than a text box - a typed "Karnatka" names no
+ * court. Asked at signup and editable on the profile screen, with the same
+ * markup, so the two cannot drift. Left out entirely if the list did not load,
+ * rather than shown as a required field nobody can fill.
+ */
+function practiceFields(prefix, currentState, currentCity, required) {
+  const states = (state.config && state.config.states) || [];
+  if (!states.length) return '';
+
+  const current = (currentState || '').toLowerCase();
+  const options = states.map((name) =>
+    '<option value="' + esc(name) + '"' + (name.toLowerCase() === current ? ' selected' : '') + '>' +
+      esc(name) + '</option>').join('');
+
+  return '<div class="field"><label for="' + prefix + '-state">State where you practise</label>' +
+      '<select id="' + prefix + '-state"' + (required ? ' required' : '') + '>' +
+        '<option value="">' + (required ? 'Choose your state' : 'Not set') + '</option>' + options +
+      '</select>' +
+      '<div class="hint">Judgments of your High Court are shown first, then the Supreme Court.</div></div>' +
+    '<div class="field"><label for="' + prefix + '-city">City <span class="optional">(optional)</span></label>' +
+      '<input id="' + prefix + '-city" type="text" autocomplete="address-level2" maxlength="80" ' +
+             'value="' + esc(currentCity || '') + '"></div>';
+}
+
 function brandMarkup() {
   return '<div class="brand"><div class="brand-mark">LEY</div>' +
     '<div class="brand-text"><b>Ley Legal</b>' +
@@ -277,87 +409,6 @@ function showAuthError(message) {
   const box = $('#auth-error');
   if (!box) return;
   box.innerHTML = message ? '<div class="alert error">' + esc(message) + '</div>' : '';
-}
-
-/**
- * The code screen.
- *
- * Reached two ways: straight after signing up, and after signing in to an
- * account created before verification existed. The info argument carries the
- * delivery result when there is one - on the sign-in path there is not,
- * because nothing was sent, which is why resend is offered rather than assumed.
- */
-function renderVerifyPhone(info) {
-  var sentTo = info && info.phoneNumber ? info.phoneNumber : '';
-  var failed = info && info.sent === false;
-
-  document.body.innerHTML =
-    '<div id="auth"><div class="auth-card">' + brandMarkup() +
-      '<h1>Verify your WhatsApp</h1>' +
-      '<p class="sub">' +
-        (sentTo
-          ? 'We sent a six-digit code to ' + esc(sentTo) + '.'
-          : 'Enter the six-digit code we sent to your WhatsApp.') +
-      '</p>' +
-      '<div id="auth-error"></div>' +
-      '<form id="auth-form">' +
-        '<div class="field"><label for="f-code">Code</label>' +
-          '<input id="f-code" type="text" inputmode="numeric" autocomplete="one-time-code" ' +
-                 'maxlength="6" pattern="[0-9]{6}" required>' +
-          '<div class="hint">It expires in ten minutes.</div></div>' +
-        '<button class="btn block" type="submit">Verify</button>' +
-      '</form>' +
-      '<div style="text-align:center;margin-top:14px">' +
-        '<button class="forgot" id="resend">Send another code</button></div>' +
-      '<div class="auth-switch"><button id="switch">Back to sign in</button></div>' +
-    '</div></div>';
-
-  // A failed delivery is shown immediately rather than after a wasted wait for
-  // a code that is not coming.
-  if (failed) showAuthError(info.message || 'We could not send the code.');
-
-  $('#switch').onclick = function () {
-    // Sign out first: the session is live but gated, and leaving it in place
-    // means the sign-in form would be rendered for somebody already holding a
-    // cookie, which reads as the form silently doing nothing.
-    post('/api/auth/logout', {}).catch(function () {}).then(function () {
-      state.user = null;
-      state.authMode = 'signin';
-      renderAuth();
-    });
-  };
-
-  $('#resend').onclick = function () {
-    var button = $('#resend');
-    button.disabled = true;
-    showAuthError('');
-    post('/api/auth/phone/resend', {}).then(function (r) {
-      $('#auth-error').innerHTML =
-        '<div class="alert info">Sent again' +
-        (r && r.phoneNumber ? ' to ' + esc(r.phoneNumber) : '') + '.</div>';
-      button.disabled = false;
-    }).catch(function (err) {
-      showAuthError(err.message);
-      button.disabled = false;
-    });
-  };
-
-  $('#auth-form').onsubmit = async function (event) {
-    event.preventDefault();
-    var button = $('#auth-form button');
-    button.disabled = true;
-    showAuthError('');
-
-    try {
-      await post('/api/auth/phone/verify-code', { code: $('#f-code').value.trim() });
-      // The gate is lifted from this point, so the ordinary entry path works.
-      await loadSession();
-      await enterApp();
-    } catch (err) {
-      showAuthError(err.message);
-      button.disabled = false;
-    }
-  };
 }
 
 function renderForgotPassword() {
@@ -374,8 +425,8 @@ function renderForgotPassword() {
   $('#switch').onclick = () => { state.authMode = 'signin'; renderAuth(); };
   $('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
-    const button = $('#auth-form button');
-    button.disabled = true;
+    const button = $('#auth-form button[type="submit"]');
+    const restore = buttonBusy(button, 'Sending…');
     try {
       await post('/api/auth/password/forgot', { email: $('#f-email').value.trim() });
       // Deliberately the same whether or not the address is registered - see
@@ -383,9 +434,11 @@ function renderForgotPassword() {
       $('#auth-error').innerHTML =
         '<div class="alert info">If that address has an account, a reset link is on its way. ' +
         'The link is valid for one hour.</div>';
+      restore();
+      button.disabled = true;
     } catch (err) {
       showAuthError(err.message);
-      button.disabled = false;
+      restore();
     }
   };
 }
@@ -426,8 +479,7 @@ function renderForgotByPhone() {
 
   $('#request-form').onsubmit = async function (event) {
     event.preventDefault();
-    var button = $('#request-form button');
-    button.disabled = true;
+    var restore = buttonBusy($('#request-form button[type="submit"]'), 'Sending…');
     showAuthError('');
     try {
       await post('/api/auth/password/forgot-phone', {
@@ -442,13 +494,12 @@ function renderForgotByPhone() {
     } catch (err) {
       showAuthError(err.message);
     }
-    button.disabled = false;
+    restore();
   };
 
   $('#auth-form').onsubmit = async function (event) {
     event.preventDefault();
-    var button = $('#auth-form button');
-    button.disabled = true;
+    var restore = buttonBusy($('#auth-form button[type="submit"]'), 'Saving…');
     showAuthError('');
     try {
       await post('/api/auth/password/reset-phone', {
@@ -464,7 +515,7 @@ function renderForgotByPhone() {
         '<div class="alert info">Password updated. Sign in with your new password.</div>';
     } catch (err) {
       showAuthError(err.message);
-      button.disabled = false;
+      restore();
     }
   };
 }
@@ -485,8 +536,7 @@ function renderResetPassword() {
 
   $('#auth-form').onsubmit = async (event) => {
     event.preventDefault();
-    const button = $('#auth-form button');
-    button.disabled = true;
+    const restore = buttonBusy($('#auth-form button[type="submit"]'), 'Saving…');
     try {
       await post('/api/auth/password/reset', { token, password: $('#f-password').value });
       $('#auth-error').innerHTML =
@@ -494,7 +544,7 @@ function renderResetPassword() {
       $('#auth-form').style.display = 'none';
     } catch (err) {
       showAuthError(err.message);
-      button.disabled = false;
+      restore();
     }
   };
 }
@@ -518,14 +568,23 @@ async function renderVerifyEmail() {
 // App shell
 // ============================================================================
 
-async function enterApp() {
+/**
+ * Draw the app, then fill it in.
+ *
+ * threadsLoad is the conversation list already on its way - boot and the
+ * sign-in form both start it alongside the session request, so by the time
+ * the shell is on screen it has usually arrived. Until it does, the sidebar
+ * shows placeholder rows rather than "No conversations yet", which would be
+ * false for most people for the half second it was visible.
+ */
+async function enterApp(threadsLoad) {
   document.body.innerHTML =
     '<div id="app" class="ready">' +
       '<aside class="sidebar" id="sidebar">' +
         '<div class="sidebar-head">' + brandMarkup() +
           '<button class="btn block" id="new-chat">New chat</button>' +
         '</div>' +
-        '<div class="thread-list" id="thread-list"></div>' +
+        '<div class="thread-list" id="thread-list">' + THREAD_SKELETON + '</div>' +
         '<div class="sidebar-foot">' +
           '<button class="credit-chip" id="credit-chip"></button>' +
           '<button class="account-btn" id="account-btn"></button>' +
@@ -554,7 +613,8 @@ async function enterApp() {
   $('#theme-toggle').onclick = toggleTheme;
   $('#account-btn').onclick = openAccount;
   $('#credit-chip').onclick = openCredits;
-  $('#send').onclick = submitQuestion;
+  // One button, two jobs: Send, and Stop while an answer is on its way.
+  $('#send').onclick = () => (state.busy ? stopAnswer() : submitQuestion());
 
   const composer = $('#composer');
   composer.addEventListener('input', autoGrow);
@@ -569,10 +629,15 @@ async function enterApp() {
 
   renderAccountButton();
   renderCredits();
-  await loadThreads();
+  // The message area and composer are usable before the list arrives.
   renderMessages();
   composer.focus();
+  await loadThreads(threadsLoad);
 }
+
+const THREAD_SKELETON =
+  '<div class="skeleton-row"></div><div class="skeleton-row short"></div>' +
+  '<div class="skeleton-row"></div><div class="skeleton-row short"></div>';
 
 function autoGrow() {
   const node = $('#composer');
@@ -598,12 +663,10 @@ function toggleSidebar() {
 // Threads
 // ============================================================================
 
-async function loadThreads() {
-  try {
-    state.threads = await api('/api/chat/threads');
-  } catch (_) {
-    state.threads = [];
-  }
+async function loadThreads(prefetched) {
+  // A list fetched in advance is used once; every later refresh asks again.
+  const threads = prefetched ? await prefetched : await loadThreadList();
+  state.threads = threads || [];
   renderThreadList();
 }
 
@@ -739,15 +802,39 @@ const STAGE_LABELS = {
   verifying: 'Verifying every citation',
 };
 
-async function submitQuestion() {
+/**
+ * Ask a question - the one in the composer, or an edited one.
+ *
+ * An edit arrives as { question, replaceMessageId }: the server removes that
+ * question and everything after it, then answers the new one in its place.
+ */
+async function submitQuestion(edit) {
   if (state.busy) return;
 
   const composer = $('#composer');
-  const question = composer.value.trim();
+  const question = edit ? edit.question.trim() : composer.value.trim();
   if (!question) return;
 
-  composer.value = '';
-  autoGrow();
+  if (!edit) {
+    composer.value = '';
+    autoGrow();
+  }
+
+  /*
+   * Everything Stop needs to undo this turn on screen: the id the server knows
+   * the request by, the messages it has sent back so far, and the question, so
+   * it can be handed back for editing.
+   */
+  const turn = {
+    requestId: newRequestId(),
+    controller: new AbortController(),
+    question,
+    messageIds: new Set(),
+    ready: false,
+    stopping: false,
+    stopped: false,
+  };
+  state.turn = turn;
   setBusy(true);
 
   // Shown immediately, before the server confirms, so the interface responds to
@@ -766,7 +853,13 @@ async function submitQuestion() {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ threadId: state.threadId, question }),
+      signal: turn.controller.signal,
+      body: JSON.stringify({
+        threadId: state.threadId,
+        question,
+        requestId: turn.requestId,
+        replaceMessageId: edit ? edit.replaceMessageId : undefined,
+      }),
     });
 
     if (!response.ok || !response.body) {
@@ -774,19 +867,93 @@ async function submitQuestion() {
       throw new Error((failure && failure.error && failure.error.message) || 'Could not send that.');
     }
 
-    await readEventStream(response.body, (event) => handleChatEvent(event, live));
+    await readEventStream(response.body, (event) => handleChatEvent(event, live, turn));
   } catch (err) {
     live.done = true;
-    state.messages.push({
-      id: 'error-' + Date.now(), role: 'assistant', content: err.message,
-      citations: [], structured: null, error: 'client',
-    });
-    renderMessages();
+    // A stopped answer ends in an aborted fetch. That is the request doing as
+    // it was told, not something to report.
+    if (!turn.stopped) {
+      state.messages.push({
+        id: 'error-' + Date.now(), role: 'assistant', content: err.message,
+        citations: [], structured: null, error: 'client',
+      });
+    }
   } finally {
+    if (state.turn === turn) state.turn = null;
     setBusy(false);
     removeLiveStages();
-    renderMessages();
+
+    if (turn.stopped) {
+      // Off the screen, as it is out of the thread and off the bill.
+      state.messages = state.messages.filter(
+        (m) => m.id !== 'pending' && !turn.messageIds.has(m.id),
+      );
+      renderMessages();
+
+      // A conversation that held only the stopped question is empty again:
+      // named as new, and gone from the sidebar until something is asked.
+      if (!state.messages.length) $('#thread-title').textContent = 'New chat';
+      void loadThreads();
+
+      // Handed back, so fixing a typo is an edit rather than retyping it.
+      composer.value = turn.question;
+      autoGrow();
+      composer.focus();
+      composer.setSelectionRange(composer.value.length, composer.value.length);
+      toast('Stopped. You were not charged - edit your question and send it again.');
+    } else {
+      renderMessages();
+    }
   }
+}
+
+/**
+ * Stop the answer on its way.
+ *
+ * The server is told first and the connection dropped second: it is the
+ * server that refunds the credits and removes the question, and it refuses
+ * once the answer has been sent - in which case the answer is left to arrive,
+ * because it has been paid for.
+ */
+async function stopAnswer() {
+  const turn = state.turn;
+  if (!turn || !turn.ready || turn.stopping || turn.stopped) return;
+
+  turn.stopping = true;
+  $('#send').disabled = true;
+
+  let result = null;
+  try {
+    result = await post('/api/chat/stop', { requestId: turn.requestId });
+  } catch (_) { /* reported below */ }
+
+  if (!result || !result.stopped) {
+    turn.stopping = false;
+    if (state.turn === turn) $('#send').disabled = false;
+    if (!result) toast('Could not stop that answer. It will finish as normal.');
+    return;
+  }
+
+  turn.stopped = true;
+  if (result.credits) { state.credits = result.credits; renderCredits(); }
+  turn.controller.abort();
+}
+
+function newRequestId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+}
+
+/** A short message at the bottom of the screen that goes away on its own. */
+function toast(text) {
+  const existing = $('#toast');
+  if (existing) existing.remove();
+
+  const note = el('div', 'toast', text);
+  note.id = 'toast';
+  note.setAttribute('role', 'status');
+  document.body.appendChild(note);
+  setTimeout(() => note.remove(), 5000);
 }
 
 /**
@@ -829,12 +996,24 @@ async function readEventStream(body, onEvent) {
   }
 }
 
-function handleChatEvent(event, live) {
+function handleChatEvent(event, live, turn) {
+  // Anything still in the pipe after Stop belongs to an answer being undone.
+  if (turn.stopped) return;
+  if ((event.type === 'message' || event.type === 'answer') && event.message) {
+    turn.messageIds.add(event.message.id);
+  }
+
   if (event.type === 'thread') {
     const isNew = state.threadId !== event.threadId;
     state.threadId = event.threadId;
     $('#thread-title').textContent = event.title;
     if (isNew) void loadThreads();
+
+    // The server now knows this request by its id, so Stop can reach it.
+    // Offered from here and not before, or a Stop pressed in the first
+    // instant would arrive ahead of the request it is stopping.
+    turn.ready = true;
+    if (!turn.stopping) $('#send').disabled = false;
     return;
   }
 
@@ -873,7 +1052,13 @@ function handleChatEvent(event, live) {
 
 function setBusy(busy) {
   state.busy = busy;
-  $('#send').disabled = busy;
+  const send = $('#send');
+  send.classList.toggle('stop', busy);
+  send.innerHTML = busy ? ICON_STOP : ICON_SEND;
+  send.setAttribute('aria-label', busy ? 'Stop' : 'Send');
+  send.title = busy ? 'Stop' : 'Send';
+  // Stop is enabled when the server has the request - see handleChatEvent.
+  send.disabled = busy;
   $('#composer').disabled = busy;
 }
 
@@ -986,6 +1171,18 @@ function emptyState() {
   }
 
   wrap.appendChild(suggestions);
+
+  // Without a state there is no home court to put first. Asked here, where a
+  // new conversation starts, rather than by blocking anything.
+  if (state.user && !state.user.state && state.config && (state.config.states || []).length) {
+    const nudge = el('button', 'state-nudge');
+    nudge.appendChild(el('b', null, 'Where do you practise?'));
+    nudge.appendChild(el('span', null,
+      'Add your state to see your High Court’s judgments first, then the Supreme Court’s.'));
+    nudge.onclick = openAccount;
+    wrap.appendChild(nudge);
+  }
+
   return wrap;
 }
 
@@ -1026,8 +1223,80 @@ function renderMessage(message) {
     body.appendChild(messageMeta(message));
   }
 
+  if (message.role === 'user' && isEditable(message)) {
+    const meta = el('div', 'msg-meta');
+    const edit = el('button', 'copy-btn edit-btn');
+    edit.innerHTML = ICON_EDIT + '<span>Edit</span>';
+    edit.onclick = () => openEditor(message, body);
+    meta.appendChild(edit);
+    body.appendChild(meta);
+  }
+
   wrap.appendChild(body);
   return wrap;
+}
+
+/**
+ * The latest question only, and only when it is settled.
+ *
+ * Editing replaces the turn - the question and the answer to it. On the last
+ * one that is exactly what is wanted; on an earlier one it would take every
+ * later answer in the thread with it, which is a lot to lose to one click.
+ */
+function isEditable(message) {
+  if (state.busy || !message.id || message.id === 'pending') return false;
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    if (state.messages[i].role === 'user') return state.messages[i] === message;
+  }
+  return false;
+}
+
+function openEditor(message, body) {
+  body.innerHTML = '';
+
+  const box = el('div', 'edit-box');
+  const area = el('textarea');
+  area.value = message.content;
+  area.rows = 2;
+
+  const hint = el('div', 'edit-hint', 'Sending replaces this question and its answer.');
+  const actions = el('div', 'edit-actions');
+  const cancel = el('button', 'btn ghost small', 'Cancel');
+  const send = el('button', 'btn small', 'Send');
+  actions.appendChild(cancel);
+  actions.appendChild(send);
+
+  const grow = () => {
+    area.style.height = 'auto';
+    area.style.height = Math.min(area.scrollHeight, 260) + 'px';
+  };
+
+  const go = () => {
+    const text = area.value.trim();
+    if (!text || text === message.content.trim()) return renderMessages();
+
+    // Off the screen now, as the server takes them out of the thread.
+    const at = state.messages.indexOf(message);
+    if (at !== -1) state.messages = state.messages.slice(0, at);
+    submitQuestion({ question: text, replaceMessageId: message.id });
+  };
+
+  cancel.onclick = () => renderMessages();
+  send.onclick = go;
+  area.addEventListener('input', grow);
+  area.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); go(); }
+    if (event.key === 'Escape') renderMessages();
+  });
+
+  box.appendChild(area);
+  box.appendChild(hint);
+  box.appendChild(actions);
+  body.appendChild(box);
+
+  grow();
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
 }
 
 function messageMeta(message) {
@@ -1108,7 +1377,8 @@ function renderPrecedents(data, message) {
   const heading = el('div');
   heading.style.cssText = 'margin-bottom:13px;font-size:13.5px;color:var(--muted)';
   heading.textContent =
-    data.items.length + ' of ' + data.totalMatches + ' matching judgments for "' + data.query + '"';
+    data.items.length + ' of ' + data.totalMatches + ' matching judgments for "' + data.query + '"' +
+    (data.ordering ? ' · ' + data.ordering : '');
   wrap.appendChild(heading);
 
   // Both of these change how much weight the results deserve, so they are shown
@@ -1179,17 +1449,24 @@ function renderPrecedentCard(item) {
   field('RESPONDENT', value(item.respondent));
   field('DATE OF JUDGMENT', item.date ? formatDate(item.date) : absent);
   field('BENCH', value(item.bench));
-  field('EQUIVALENT CITATIONS',
-    item.equivalentCitations && item.equivalentCitations.length
-      ? item.equivalentCitations.join('; ')
-      : absent);
+  if (item.equivalentCitations && item.equivalentCitations.length) {
+    field('EQUIVALENT CITATIONS', item.equivalentCitations.join('; '));
+  }
   field('COURT', value(item.court));
   card.appendChild(rows);
 
   const principle = el('div', 'holding');
-  principle.appendChild(el('b', null, 'LEGAL PRINCIPLE: '));
+  principle.appendChild(el('b', null, 'SUMMARY: '));
   principle.appendChild(document.createTextNode(value(item.legalPrinciple)));
   card.appendChild(principle);
+
+  if (item.fullSummary) {
+    const full = el('div', 'holding');
+    full.style.marginTop = '9px';
+    full.appendChild(el('b', null, 'FULL SUMMARY: '));
+    full.appendChild(document.createTextNode(item.fullSummary));
+    card.appendChild(full);
+  }
 
   if (item.sections && item.sections.length) {
     const sections = el('div', 'sections');
@@ -1213,20 +1490,28 @@ function renderCaseStatus(data) {
 
   const rows = el('dl', 'case-rows');
   const fields = [
-    ['Status', data.status],
+    ['Status', data.statusLabel || data.status],
+    ['Decided', data.decisionDate],
+    ['Nature of disposal', data.disposalNature],
+    ['FIR', data.fir],
     ['Stage', data.stage],
     ['Court', data.court],
     ['Judge', data.judge],
-    ['Registration number', data.caseNumber],
-    // A different number from the registration one, and on the record the
-    // provider returns they genuinely differ.
+    ['Case type', data.caseType],
+    // The three numbers an advocate quotes, in the order the WhatsApp card
+    // prints them. Filing and registration genuinely differ on real records -
+    // "9623/2024" and "138/2024" on the first one - so they are never merged.
     ['Filing number', data.filingNumber],
+    ['Registration number', data.caseNumber],
+    ['CNR case number', data.cnrCaseNumber],
     ['Filed', data.filingDate],
+    ['Registered', data.registrationDate],
     ['First hearing', data.firstHearingDate],
     ['Next hearing', data.nextHearingDate],
     ['Last hearing', data.lastHearingDate],
     ['Petitioner advocate', data.petitionerAdvocate],
     ['Respondent advocate', data.respondentAdvocate],
+    ['Record updated', data.recordUpdated],
   ];
 
   for (const [label, value] of fields) {
@@ -1683,14 +1968,69 @@ function openAccount() {
 function renderProfileTab(panel, close) {
   const user = state.user;
 
+  /*
+   * Name, state and city are the advocate's to change. The state matters most:
+   * it decides whose judgments come first, and somebody who signed in with
+   * Google was never asked for it.
+   */
+  const edit = el('div', 'profile-form');
+  edit.innerHTML =
+    '<div class="field"><label for="p-name">Name</label>' +
+      '<input id="p-name" type="text" autocomplete="name" maxlength="120"></div>' +
+    practiceFields('p', user.state, user.city, false);
+  edit.querySelector('#p-name').value = user.fullName || '';
+
+  const save = el('button', 'btn', 'Save changes');
+  const feedback = el('div');
+  feedback.style.marginTop = '10px';
+
+  save.onclick = async () => {
+    const changes = {};
+    const name = edit.querySelector('#p-name').value.trim();
+    const chosen = edit.querySelector('#p-state');
+    const city = edit.querySelector('#p-city');
+
+    if (name !== (user.fullName || '')) changes.fullName = name;
+    if (chosen && chosen.value.toLowerCase() !== (user.state || '').toLowerCase()) {
+      changes.state = chosen.value || null;
+    }
+    if (city && city.value.trim() !== (user.city || '')) changes.city = city.value.trim();
+
+    if (!Object.keys(changes).length) {
+      feedback.innerHTML = '<div class="alert info">Nothing has changed.</div>';
+      return;
+    }
+
+    const restore = buttonBusy(save, 'Saving…');
+    feedback.innerHTML = '';
+    try {
+      const result = await api('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(changes) });
+      state.user = result.user;
+      renderAccountButton();
+      // The "where do you practise?" prompt behind this dialog goes once answered.
+      renderMessages();
+      restore();
+      // Redrawn from what was stored, so the form shows the server's spelling.
+      panel.innerHTML = '';
+      renderProfileTab(panel, close);
+      toast('Profile saved.');
+    } catch (err) {
+      restore();
+      feedback.innerHTML = '<div class="alert error">' + esc(err.message) + '</div>';
+    }
+  };
+
+  panel.appendChild(edit);
+  panel.appendChild(save);
+  panel.appendChild(feedback);
+
   const rows = el('div');
-  rows.appendChild(infoRow('Name', user.fullName || 'Not set'));
+  rows.style.marginTop = '22px';
   rows.appendChild(infoRow('Email', user.email || 'Not set',
     user.email ? (user.emailVerified ? 'Confirmed' : 'Unconfirmed') : null,
     user.email && !user.emailVerified));
   rows.appendChild(infoRow('WhatsApp', user.phoneNumber || 'Not linked',
     user.phoneVerified ? 'Verified' : null, false));
-  rows.appendChild(infoRow('Practice', [user.city, user.state].filter(Boolean).join(', ') || 'Not set'));
   rows.appendChild(infoRow('Bar Council ID', user.barCouncilOnRecord ? 'On record' : 'Not submitted'));
   rows.appendChild(infoRow('Account status',
     user.verificationStatus === 'VERIFIED' ? 'Verified advocate' : 'Guest'));
@@ -2049,6 +2389,11 @@ const ICON_THEME = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" 
   'stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
 const ICON_SEND = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
   'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>';
+const ICON_STOP = '<svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">' +
+  '<rect x="3" y="3" width="18" height="18" rx="3" fill="currentColor"/></svg>';
+const ICON_EDIT = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 
 boot();
 `;

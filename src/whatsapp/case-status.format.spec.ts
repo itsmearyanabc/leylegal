@@ -6,6 +6,12 @@ function status(overrides: Partial<CaseStatus> = {}): CaseStatus {
     cnr: 'BRMG030000191989',
     caseNumber: 'CS/123/2024',
     filingNumber: 'F/9623/2024',
+    cnrCaseNumber: '0001911989',
+    statusLabel: 'Pending',
+    decisionDate: null,
+    disposalNature: null,
+    fir: null,
+    recordUpdated: null,
     caseType: 'Civil Suit',
     filingDate: '2024-01-10',
     registrationDate: '2024-01-15',
@@ -30,7 +36,7 @@ describe('formatCaseStatus', () => {
     const out = formatCaseStatus(status());
     const labels = [
       'Case Type', 'Filing Number', 'Filing Date', 'Registration Number',
-      'Registration Date', 'CNR Number', 'First Hearing Date', 'Last Hearing Date',
+      'Registration Date', 'CNR Number', 'CNR Case Number', 'First Hearing Date', 'Last Hearing Date',
       'Next Hearing Date', 'Case Status', 'Stage of Case', 'Court', 'Judge',
       'Petitioner and Advocate', 'Respondent and Advocate',
     ];

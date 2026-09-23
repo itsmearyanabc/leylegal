@@ -290,15 +290,15 @@ export function extractStatuteRefs(text: string): string[] {
   // The suffix letter is adjacent to the digits for the same reason as in
   // extractSectionReference - otherwise "302 IPC" becomes section "302I".
   const forward =
-    /\b(?:u\/s|under\s+sections?|sections?|secs?|s)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s*(?:of\s+(?:the\s+)?)?\b(IPC|BNS|CrPC|BNSS|IEA|BSA)\b/gi;
+    /\b(?:u\/s|under\s+sections?|sections?|secs?|s|orders?|o|articles?|arts?)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s*(?:of\s+(?:the\s+)?)?\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
   // "IPC Section 302" / "IPC 302"
   const backward =
-    /\b(IPC|BNS|CrPC|BNSS|IEA|BSA)\b\s*(?:sections?|secs?|s)?\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/gi;
+    /\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b\s*(?:sections?|secs?|s|orders?|o|articles?|arts?)?\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/gi;
   // Bare "302 IPC" with no section keyword at all. Needed for the second and
   // later items in a list - "Sections 302 IPC and 498A IPC" carries the keyword
   // only once, so without this every provision after the first goes unverified.
   const bare =
-    /\b(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s+(?:of\s+(?:the\s+)?)?(IPC|BNS|CrPC|BNSS|IEA|BSA)\b/gi;
+    /\b(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s+(?:of\s+(?:the\s+)?)?(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
 
   let match: RegExpExecArray | null;
 
@@ -327,8 +327,25 @@ export function extractStatuteRefs(text: string): string[] {
 const SYNONYM_GROUPS: string[][] = [
   ['bail', 'interim bail', 'anticipatory bail', 'regular bail'],
   ['fir', 'first information report'],
-  ['ipc', 'indian penal code', 'bns', 'bharatiya nyaya sanhita'],
-  ['crpc', 'code of criminal procedure', 'bnss', 'bharatiya nagarik suraksha sanhita'],
+  /*
+   * One group per act, deliberately - these used to be two groups of four,
+   * pairing each old code with the one that replaced it.
+   *
+   * That treats "IPC" and "BNS" as synonyms, and they are not: they are two
+   * different statutes, and the whole point of naming one is to exclude the
+   * other. Asking about BNS 103 had "ipc" and "indian penal code" appended to
+   * the lexical query, which then outranked everything - the corpus is almost
+   * entirely IPC - and the answer came back about the IPC. The reported
+   * symptom was "not able to search BNS, still talking about IPC".
+   *
+   * The correspondence between them is real and is not a synonym relationship.
+   * It lives on the row, in corresponding_act/corresponding_section, and
+   * migration 0017 is what searches it.
+   */
+  ['ipc', 'indian penal code'],
+  ['bns', 'bharatiya nyaya sanhita'],
+  ['crpc', 'code of criminal procedure'],
+  ['bnss', 'bharatiya nagarik suraksha sanhita'],
   ['quash', 'quashing', 'quashment'],
   ['acquittal', 'acquitted', 'acquit'],
   ['conviction', 'convicted', 'convict'],

@@ -138,6 +138,16 @@ describe('GuardrailsService', () => {
     expect(result.text).toContain('[unverified]');
   });
 
+  it('keeps an unverified statutory section if it was the one asked by the advocate', async () => {
+    const service = makeService([], [{ ref: 'BNS 352', found: false }]);
+    const intent = { actCode: 'BNS', sectionNumber: '352' } as any;
+
+    const result = await service.verify('This falls under section 352 BNS.', [], intent);
+
+    expect(result.removed).toHaveLength(0);
+    expect(result.text).toContain('352');
+  });
+
   it('keeps a real statutory section', async () => {
     const service = makeService([], [{ ref: 'IPC 302', found: true }]);
 

@@ -1,7 +1,6 @@
 import {
   CanActivate,
   ExecutionContext,
-  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -9,7 +8,6 @@ import type { FastifyRequest } from 'fastify';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
 import { UserRow, WebSessionRow } from '../database/types';
-import { SettingsService } from '../settings/settings.service';
 import { AuthService } from './auth.service';
 import { readCookie } from './cookies';
 
@@ -50,7 +48,6 @@ export type WebRequest = FastifyRequest & { principal?: WebPrincipal };
 export class UserAuthGuard implements CanActivate {
   constructor(
     private readonly auth: AuthService,
-    private readonly settings: SettingsService,
     @InjectEnv() private readonly env: AppEnv,
   ) {}
 
@@ -80,51 +77,17 @@ export class UserAuthGuard implements CanActivate {
       });
     }
 
-    const enforced = this.settings.getBoolean(
-      'PHONE_VERIFICATION_REQUIRED',
-      this.env.PHONE_VERIFICATION_REQUIRED,
-    );
-
-    if (enforced && !resolved.user.phone_verified_at && !isReachableUnverified(request.url)) {
-      throw new ForbiddenException({
-        code: 'PHONE_UNVERIFIED',
-        message: 'Verify your WhatsApp number to continue.',
-      });
-    }
-
+    /*
+     * No WhatsApp-verification gate.
+     *
+     * There was one here, switched by PHONE_VERIFICATION_REQUIRED, and the
+     * template in .env.example shipped it on - so every new account was
+     * created, signed in, and then refused on its first request with a code
+     * screen for a code that signup no longer sends. Anyone may create an
+     * account and use it at once. Linking a WhatsApp number is still offered
+     * from the account screen; it is not the price of getting in.
+     */
     request.principal = { user: resolved.user, session: resolved.session, token };
     return true;
   }
-}
-
-/**
- * The few endpoints an account with an unproven number may still reach.
- *
- * ## Why the gate lives in the guard
- *
- * Every authenticated endpoint on this surface goes through here, so putting
- * the check anywhere else means remembering to add it to each new one - and the
- * failure mode of forgetting is an unverified account with full access, which
- * nothing in a test suite would notice. Inverting it costs an allow-list that
- * has to be maintained, but a mistake in *that* direction locks a user out
- * loudly instead of letting them through silently.
- *
- * The three that must stay open are the ones that lift the gate or get out from
- * behind it: reading your own state, redeeming a code, and asking for another.
- * Sign-out is here because trapping someone in a session they cannot use and
- * cannot leave is its own bug.
- */
-const UNVERIFIED_ALLOWED = [
-  '/api/auth/me',
-  '/api/auth/phone/verify-code',
-  '/api/auth/phone/resend',
-  '/api/auth/logout',
-];
-
-function isReachableUnverified(url: string): boolean {
-  // Compared against the path alone: `request.url` carries the query string,
-  // and a startsWith test against the raw value would let
-  // `/api/chat/ask?x=/api/auth/me` through on some client's URL shape.
-  const path = url.split('?')[0].replace(/\/+$/, '') || '/';
-  return UNVERIFIED_ALLOWED.includes(path);
 }

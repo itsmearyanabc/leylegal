@@ -38,7 +38,9 @@ function kanoonRow(over: Partial<PrecedentRow> = {}): PrecedentRow {
   } as PrecedentRow;
 }
 
-function build(over: { rows?: PrecedentRow[]; enrichMax?: number; header?: unknown } = {}) {
+function build(
+  over: { rows?: PrecedentRow[]; enrichMax?: number; header?: unknown; registry?: unknown } = {},
+) {
   const rows = over.rows ?? [kanoonRow()];
 
   const kanoon = {
@@ -46,7 +48,13 @@ function build(over: { rows?: PrecedentRow[]; enrichMax?: number; header?: unkno
     isDegraded: false,
     search: jest.fn().mockResolvedValue(rows),
     documentHeader: jest.fn().mockResolvedValue(
-      over.header ?? { caseNumber: 'CWP No. 2843/2019', bench: ['Tarlok Singh Chauhan', 'Virender Singh'] },
+      over.header ?? {
+        caseNumber: 'CWP No. 2843/2019',
+        neutralCitation: null,
+        equivalentCitations: [],
+        bench: ['Tarlok Singh Chauhan', 'Virender Singh'],
+        extract: '',
+      },
     ),
   };
 
@@ -55,7 +63,7 @@ function build(over: { rows?: PrecedentRow[]; enrichMax?: number; header?: unkno
     {} as never,
     kanoon as never,
     { get: () => 'kanoon', getNumber: (_k: string, d: number) => d } as never,
-    { isRouterMocked: true } as never,
+    (over.registry ?? { isRouterMocked: true }) as never,
     {
       KANOON_ENRICH_MAX: over.enrichMax ?? 5,
       PRECEDENT_MAX_RESULTS: 15,
@@ -138,5 +146,322 @@ describe('filling the two fields Kanoon has no field for', () => {
 
     expect(result.precedents).toHaveLength(1);
     expect(result.precedents[0].case_title).toContain('Rajender Kumar');
+  });
+});
+
+describe('EQUIVALENT CITATIONS, from the judgment Kanoon printed them in', () => {
+  /*
+   * Empty on every card for months and explained as impossible. It was
+   * concluded from probing one unreported judgment. A reported one carries its
+   * citations on the search result and, in full, in the document's
+   * doc_citations heading.
+   */
+  const reported = {
+    caseNumber: 'Writ Petition (civil) 135 of 1970',
+    neutralCitation: null,
+    equivalentCitations: ['AIR 1973 SUPREME COURT 1461', '1973 4 SCC 225'],
+    bench: ['S.M. Sikri'],
+    extract: '',
+  };
+
+  it('fills the field from the document', async () => {
+    const { service } = build({ header: reported });
+
+    const result = await service.search(intent() as never);
+
+    expect(result.precedents[0].reporter_citations).toEqual([
+      'AIR 1973 SUPREME COURT 1461',
+      '1973 4 SCC 225',
+    ]);
+  });
+
+  it('does not print the citation twice when the search result carried it too', async () => {
+    // The search result sends the first citation and the document sends all of
+    // them, so the first one arrives from both.
+    const { service } = build({
+      rows: [kanoonRow({ reporter_citations: ['AIR 1973 SUPREME COURT 1461'] })],
+      header: reported,
+    });
+
+    const result = await service.search(intent() as never);
+
+    expect(result.precedents[0].reporter_citations).toEqual([
+      'AIR 1973 SUPREME COURT 1461',
+      '1973 4 SCC 225',
+    ]);
+  });
+
+  it('lists a reporter citation ahead of a neutral one', async () => {
+    const { service } = build({
+      header: {
+        caseNumber: null,
+        neutralCitation: '2024:PHHC:012345',
+        equivalentCitations: ['2024 SCC OnLine P&H 99'],
+        bench: [],
+        extract: '',
+      },
+    });
+
+    const result = await service.search(intent() as never);
+
+    expect(result.precedents[0].reporter_citations).toEqual([
+      '2024 SCC OnLine P&H 99',
+      '2024:PHHC:012345',
+    ]);
+  });
+
+  it('still enriches a row whose only new information is a citation', async () => {
+    // The early return used to require a case number, a bench or an extract,
+    // so a header carrying nothing but citations was discarded.
+    const { service } = build({
+      header: { caseNumber: null, neutralCitation: null, equivalentCitations: ['AIR 1990 SC 1'], bench: [], extract: '' },
+    });
+
+    const result = await service.search(intent() as never);
+
+    expect(result.precedents[0].reporter_citations).toEqual(['AIR 1990 SC 1']);
+  });
+});
+
+describe('which rows get the document fetched', () => {
+  /*
+   * Enrichment pays for one page of documents, and the home-court promotion ran
+   * afterwards, at the call site - so it lifted judgments from positions six to
+   * fifteen into positions one to three, and those are exactly the rows no
+   * document had been fetched for.
+   *
+   * The advocate's own High Court binds them, so those are the cards read
+   * first. They were the ones showing "Not available" for the case number, the
+   * bench and the citations, while the persuasive judgments below them were
+   * complete.
+   */
+  function mixed() {
+    return Array.from({ length: 15 }, (_, i) =>
+      kanoonRow({
+        judgment_id: `kanoon:${i + 1}`,
+        // The advocate's own court sits well past the enriched page.
+        court_name: i === 10 ? 'Karnataka High Court' : 'Himachal Pradesh High Court',
+      }),
+    );
+  }
+
+  it('fetches the document for the judgment it is about to put first', async () => {
+    const { service, kanoon } = build({ rows: mixed(), enrichMax: 5 });
+
+    await service.search(intent() as never, 'Karnataka');
+
+    const fetched = kanoon.documentHeader.mock.calls.map((call) => call[0]);
+    expect(fetched).toContain(11);
+  });
+
+  it('puts it first', async () => {
+    const { service } = build({ rows: mixed(), enrichMax: 5 });
+
+    const result = await service.search(intent() as never, 'Karnataka');
+
+    expect(result.precedents[0].court_name).toBe('Karnataka High Court');
+  });
+
+  it('still pays for only one page', async () => {
+    const { service, kanoon } = build({ rows: mixed(), enrichMax: 5 });
+
+    await service.search(intent() as never, 'Karnataka');
+
+    expect(kanoon.documentHeader).toHaveBeenCalledTimes(5);
+  });
+
+  it('changes nothing when the advocate has no home court on record', async () => {
+    const { service, kanoon } = build({ rows: mixed(), enrichMax: 5 });
+
+    await service.search(intent() as never, null);
+
+    const fetched = kanoon.documentHeader.mock.calls.map((call) => call[0]);
+    expect(fetched).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe('the documented search operators, and falling back from them', () => {
+  /*
+   * A named case was searched as free text over the parties, so it competed
+   * with every judgment against the same State. Kanoon documents `title:` for
+   * exactly this lookup, and `cite:` for a pasted citation. Each narrows, so
+   * each is followed by a broader attempt - a narrowing that matches nothing
+   * must not become "no authority found".
+   */
+  function named(text: string) {
+    return { ...intent(text), rawText: text, searchQuery: text };
+  }
+
+  const mittal = kanoonRow({
+    judgment_id: 'kanoon:500',
+    case_title: 'Rajesh Kumar Mittal vs State Of Bihar',
+    court_name: 'Patna High Court',
+  });
+  const stranger = kanoonRow({
+    judgment_id: 'kanoon:501',
+    case_title: 'Atc Telecom Infrastructure Pvt Ltd vs The State Of Bihar',
+    court_name: 'Patna High Court',
+  });
+
+  it('asks for the title first, and stops there when it answers', async () => {
+    const { service, kanoon } = build();
+    kanoon.search.mockResolvedValue([mittal]);
+
+    await service.search(named('Rajesh Kumar Mittal vs State of Bihar in Patna High Court') as never);
+
+    expect(kanoon.search).toHaveBeenCalledTimes(1);
+    expect(kanoon.search.mock.calls[0][0]).toBe(
+      'doctypes:patna title: Rajesh Kumar Mittal State of Bihar',
+    );
+  });
+
+  it('falls back to the parties when the title search finds somebody else', async () => {
+    // Ten results that are all a different case are not an answer, however
+    // many there are.
+    const { service, kanoon } = build();
+    kanoon.search.mockImplementation(async (query: string) =>
+      query.startsWith('doctypes:patna title:') ? [stranger] : [mittal],
+    );
+
+    const result = await service.search(
+      named('Rajesh Kumar Mittal vs State of Bihar in Patna High Court') as never,
+    );
+
+    expect(kanoon.search).toHaveBeenCalledTimes(2);
+    expect(result.precedents[0].case_title).toBe('Rajesh Kumar Mittal vs State Of Bihar');
+  });
+
+  it('skips an attempt that throws instead of losing the whole search', async () => {
+    // A malformed operand is still a failed call, and it must not cost the
+    // advocate the broader search behind it.
+    const { service, kanoon } = build();
+    kanoon.search.mockImplementation(async (query: string) => {
+      if (query.includes('title:')) throw new Error('Indian Kanoon error: bad query');
+      return [mittal];
+    });
+
+    const result = await service.search(named('Rajesh Kumar Mittal vs State of Bihar') as never);
+
+    expect(result.precedents[0].case_title).toBe('Rajesh Kumar Mittal vs State Of Bihar');
+  });
+
+  it('surfaces the error only when every attempt failed', async () => {
+    // That is what lets a charge be refunded, and lets the auto source fall back.
+    const { service, kanoon } = build();
+    kanoon.search.mockRejectedValue(new Error('indian kanoon is down'));
+
+    await expect(
+      service.search(named('Rajesh Kumar Mittal vs State of Bihar') as never),
+    ).rejects.toThrow('indian kanoon is down');
+  });
+
+  it('returns the narrowest results as near misses when nothing answers', async () => {
+    const { service, kanoon } = build();
+    kanoon.search.mockResolvedValue([stranger]);
+
+    const result = await service.search(named('Rajesh Kumar Mittal vs State of Bihar') as never);
+
+    expect(result.namedCase).toEqual({ name: 'Rajesh Kumar Mittal vs State of Bihar', found: false });
+    expect(result.precedents[0].case_title).toContain('Atc Telecom');
+  });
+
+  it('uses cite: for a pasted citation', async () => {
+    const { service, kanoon } = build();
+    kanoon.search.mockResolvedValue([mittal]);
+
+    await service.search(named('AIR 1973 SC 1461') as never);
+
+    expect(kanoon.search.mock.calls[0][0]).toMatch(/^cite: AIR 1973 SC 1461/);
+  });
+});
+
+describe('"summary in 100 words"', () => {
+  /*
+   * Asked for and not delivered, three ways at once: the length never reached
+   * the summariser on the Kanoon path, the card cut whatever it wrote at 200
+   * characters, and the request itself was read as part of the case name.
+   */
+  const mittal = kanoonRow({
+    judgment_id: 'kanoon:500',
+    case_title: 'Rajesh Kumar Mittal vs State Of Bihar',
+    court_name: 'Patna High Court',
+  });
+  const header = {
+    caseNumber: 'CWJC No. 1/2020',
+    neutralCitation: null,
+    equivalentCitations: [],
+    bench: [],
+    extract:
+      'The petitioner challenges the order of the District Magistrate cancelling his arms licence. ' +
+      'The only ground stated is a pending criminal case in which he has since been acquitted. ' +
+      'The question is whether the licensing authority may rely on a charge that has ended in acquittal.',
+  };
+
+  function summariser(principle = 'The petitioner challenged the cancellation of his arms licence.') {
+    return {
+      isRouterMocked: false,
+      complete: jest
+        .fn()
+        .mockResolvedValue({ text: JSON.stringify({ principles: [{ n: 1, principle }] }) }),
+    };
+  }
+
+  function asked(text: string) {
+    return { ...intent(text), rawText: text, searchQuery: text };
+  }
+
+  it('finds the named case with the request wrapped around it', async () => {
+    const registry = summariser();
+    const { service, kanoon } = build({ rows: [mittal], header, registry });
+
+    const result = await service.search(
+      asked('give me summary of Rajesh Kumar Mittal vs State of Bihar in 100 words') as never,
+    );
+
+    expect(kanoon.search.mock.calls[0][0]).toBe('title: Rajesh Kumar Mittal State of Bihar');
+    expect(result.namedCase).toEqual({ name: 'Rajesh Kumar Mittal vs State of Bihar', found: true });
+  });
+
+  it('tells the summariser the length, and gives it room to write it', async () => {
+    const registry = summariser();
+    const { service } = build({ rows: [mittal], header, registry });
+
+    await service.search(asked('Rajesh Kumar Mittal vs State of Bihar summary 100 words me do') as never);
+
+    const call = registry.complete.mock.calls[0][0];
+    expect(call.system).toContain('about 100 words');
+    expect(call.maxTokens).toBeGreaterThanOrEqual(100 * 2);
+  });
+
+  it('writes one summary at that length, not a second one under it', async () => {
+    const registry = summariser();
+    const { service } = build({ rows: [mittal], header, registry });
+
+    const result = await service.search(
+      asked('summary of Rajesh Kumar Mittal vs State of Bihar in 100 words') as never,
+    );
+
+    expect(registry.complete).toHaveBeenCalledTimes(1);
+    expect(result.precedents[0].generated_principle).toContain('arms licence');
+  });
+
+  it('keeps both summaries on a named case when no length was asked for', async () => {
+    const registry = summariser();
+    const { service } = build({ rows: [mittal], header, registry });
+
+    await service.search(asked('Rajesh Kumar Mittal vs State of Bihar') as never);
+
+    expect(registry.complete).toHaveBeenCalledTimes(2);
+    expect(registry.complete.mock.calls[0][0].system).toContain('at most 80 words');
+  });
+
+  it('applies to every card of a topic search too', async () => {
+    const registry = summariser();
+    const { service, kanoon } = build({ rows: [mittal], header, registry });
+
+    await service.search(asked('judgments on cancellation of arms licence, summary in 150 words') as never);
+
+    expect(kanoon.search.mock.calls[0][0]).not.toContain('150');
+    expect(registry.complete.mock.calls[0][0].system).toContain('about 150 words');
   });
 });
