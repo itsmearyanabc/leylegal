@@ -1068,7 +1068,7 @@ function renderLiveStages(live) {
 
   const wrap = el('div', 'msg assistant');
   wrap.id = 'live-stages';
-  wrap.appendChild(el('div', 'who-mark', 'VS'));
+  wrap.appendChild(el('div', 'who-mark', 'LEY'));
 
   const body = el('div', 'body');
   const stages = el('div', 'stages');
@@ -1190,7 +1190,7 @@ function renderMessage(message) {
   const wrap = el('div', 'msg ' + message.role);
 
   const mark = el('div', 'who-mark');
-  mark.textContent = message.role === 'user' ? initials(state.user) : 'VS';
+  mark.textContent = message.role === 'user' ? initials(state.user) : 'LEY';
   wrap.appendChild(mark);
 
   const body = el('div', 'body');

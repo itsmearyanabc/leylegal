@@ -264,7 +264,7 @@ button { cursor:pointer; }
   display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700;
 }
 .msg.user .who-mark { background:var(--surface-3); color:var(--muted); }
-.msg.assistant .who-mark { background:var(--olive); color:#FFFFFF; }
+.msg.assistant .who-mark { background:var(--olive); color:#FFFFFF; font-size:11px; letter-spacing:-.02em; }
 .msg .body { flex:1; min-width:0; padding-top:3px; }
 .msg .body > *:first-child { margin-top:0; }
 .msg .body > *:last-child { margin-bottom:0; }
