@@ -40,6 +40,7 @@ import { SETTING_DEFINITIONS, SETTING_GROUPS } from '../settings/settings.catalo
 import { SettingsService } from '../settings/settings.service';
 import { WhatsAppConnectionTester } from '../settings/whatsapp-tester.service';
 import { UsersService } from '../users/users.service';
+import { ChatAdmission } from '../web/chat-admission.service';
 import { WhatsAppApiService } from '../whatsapp/whatsapp-api.service';
 import { AdminGuard } from './admin.guard';
 import { AuthenticatedRequest } from './admin.guard';
@@ -100,6 +101,7 @@ export class AdminController {
     private readonly ecourts: EcourtsService,
     private readonly queue: JobQueueService,
     private readonly db: DatabaseService,
+    private readonly admission: ChatAdmission,
   ) {}
 
   // --- Dashboard ------------------------------------------------------------
@@ -500,6 +502,8 @@ export class AdminController {
 
     return {
       queue,
+      // Web answers in progress, waiting, and refused as too busy since start.
+      webAnswers: this.admission.stats(),
       dependencies: { database },
       process: {
         uptimeSeconds: Math.floor(process.uptime()),

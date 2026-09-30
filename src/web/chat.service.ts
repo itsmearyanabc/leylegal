@@ -200,6 +200,10 @@ export class ChatService {
   }): AsyncGenerator<ChatEvent> {
     const { user, threadId, question, reference } = input;
 
+    // Nobody to answer (the client left while this was being set up): stop
+    // before the model call, not only before the charge.
+    if (input.stopped?.()) return;
+
     yield { type: 'stage', stage: 'classifying' };
     const intent = await this.intents.classify(question);
 

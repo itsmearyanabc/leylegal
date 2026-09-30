@@ -43,6 +43,28 @@ const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   SUPABASE_STORAGE_BUCKET: z.string().default('leylegal-documents'),
 
+  // --- Web answer admission -------------------------------------------------
+  /**
+   * At most this many web answers in progress per web process. 0 = derive:
+   * three per database connection.
+   *
+   * Every answer holds a database connection for many sequential queries.
+   * Past the point where the pool is saturated, admitting more only lengthens
+   * the pool's queue for everyone - measured, that turned a slowdown into a
+   * collapse at ~1,000 simultaneous askers. See src/common/admission-gate.ts.
+   */
+  CHAT_MAX_CONCURRENT: z.coerce.number().int().min(0).max(1000).default(0),
+  /**
+   * How many more may wait for a slot. -1 = derive: a third of the limit,
+   * which at the measured ceiling drains in ~4 s, inside the default wait.
+   *
+   * Kept short on purpose. Under sustained overload the line is always full,
+   * so a long one only makes people wait longer before being told no.
+   */
+  CHAT_MAX_WAITING: z.coerce.number().int().min(-1).max(10_000).default(-1),
+  /** How long one may wait before being told to try again. */
+  CHAT_WAIT_TIMEOUT_MS: z.coerce.number().int().min(0).max(120_000).default(10_000),
+
   // --- Job queue ------------------------------------------------------------
   // Postgres-backed since migration 0013. There is no Redis in this service.
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(4),
@@ -448,6 +470,10 @@ export type AppEnv = RawEnv & {
   readonly emailConfigured: boolean;
   /** True when Razorpay has both keys. Gates the buy-credits UI. */
   readonly razorpayConfigured: boolean;
+  /** Web answers admitted at once per process, after deriving the 0 default. */
+  readonly chatMaxConcurrent: number;
+  /** Web answers allowed to wait for a slot, after deriving the -1 default. */
+  readonly chatMaxWaiting: number;
 };
 
 /**
@@ -490,6 +516,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ? env.GOOGLE_OAUTH_REDIRECT_PATH
     : `/${env.GOOGLE_OAUTH_REDIRECT_PATH}`;
 
+  const chatMaxConcurrent = env.CHAT_MAX_CONCURRENT > 0 ? env.CHAT_MAX_CONCURRENT : env.DATABASE_POOL_MAX * 3;
+
   return {
     ...env,
     isProduction: env.NODE_ENV === 'production',
@@ -508,6 +536,8 @@ export function parseEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     sessionTtlSeconds: env.SESSION_TTL_DAYS * 86_400,
     emailConfigured: env.EMAIL_PROVIDER === 'resend' && Boolean(env.RESEND_API_KEY),
     razorpayConfigured: Boolean(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET),
+    chatMaxConcurrent,
+    chatMaxWaiting: env.CHAT_MAX_WAITING >= 0 ? env.CHAT_MAX_WAITING : Math.ceil(chatMaxConcurrent / 3),
   };
 }
 

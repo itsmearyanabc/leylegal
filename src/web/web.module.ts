@@ -1,8 +1,9 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { AiModule } from '../ai/ai.module';
 import { AuthModule } from '../auth/auth.module';
 import { CreditsModule } from '../credits/credits.module';
 import { EcourtsModule } from '../ecourts/ecourts.module';
+import { ChatAdmissionMiddleware, ChatAdmissionModule } from './chat-admission.service';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { LandingController } from './landing.controller';
@@ -24,8 +25,13 @@ import { WebUiController } from './web-ui.controller';
  * chat.service.ts for why the two clients differ on that.
  */
 @Module({
-  imports: [AiModule, AuthModule, CreditsModule, EcourtsModule],
+  imports: [AiModule, AuthModule, CreditsModule, EcourtsModule, ChatAdmissionModule],
   controllers: [LandingController, WebUiController, ChatController],
   providers: [ChatService],
 })
-export class WebModule {}
+export class WebModule implements NestModule {
+  /** Each question takes an answer slot before the session lookup - see ChatAdmissionMiddleware. */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(ChatAdmissionMiddleware).forRoutes({ path: 'api/chat/ask', method: RequestMethod.POST });
+  }
+}

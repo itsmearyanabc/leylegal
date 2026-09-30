@@ -836,6 +836,8 @@ async function submitQuestion(edit) {
     ready: false,
     stopping: false,
     stopped: false,
+    // Set when the server was too busy to take the question (503 BUSY).
+    busy: null,
   };
   state.turn = turn;
   setBusy(true);
@@ -867,6 +869,12 @@ async function submitQuestion(edit) {
 
     if (!response.ok || !response.body) {
       const failure = await response.json().catch(() => null);
+      // Too busy to take it right now: nothing was saved or charged, so the
+      // question is handed back like a Stop rather than shown as a failure.
+      if (response.status === 503 && failure && failure.error && failure.error.code === 'BUSY') {
+        turn.busy = failure.error.message;
+        return;
+      }
       throw new Error((failure && failure.error && failure.error.message) || 'Could not send that.');
     }
 
@@ -886,7 +894,7 @@ async function submitQuestion(edit) {
     setBusy(false);
     removeLiveStages();
 
-    if (turn.stopped) {
+    if (turn.stopped || turn.busy) {
       // Off the screen, as it is out of the thread and off the bill.
       state.messages = state.messages.filter(
         (m) => m.id !== 'pending' && !turn.messageIds.has(m.id),
@@ -903,7 +911,7 @@ async function submitQuestion(edit) {
       autoGrow();
       composer.focus();
       composer.setSelectionRange(composer.value.length, composer.value.length);
-      toast('Stopped. You were not charged - edit your question and send it again.');
+      toast(turn.busy || 'Stopped. You were not charged - edit your question and send it again.');
     } else {
       renderMessages();
     }

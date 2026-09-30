@@ -218,8 +218,10 @@ export class ChatController {
     });
 
     // Whether the browser is still there. A closed connection is normal - the
-    // advocate navigated away or hit stop - and must not be logged as an error
-    // or stop the answer being persisted, which has already happened by then.
+    // advocate navigated away or hit stop - and is not an error. Once the answer
+    // is under way it is still finished and saved, so it is in the thread when
+    // they come back. (Admission was decided before this handler ran - see
+    // ChatAdmissionMiddleware, which holds this request's slot until it ends.)
     let open = true;
     reply.raw.on('close', () => {
       open = false;
@@ -232,10 +234,10 @@ export class ChatController {
 
     // Registered before the first await, so a Stop pressed at once still finds it.
     const requestId = typeof body?.requestId === 'string' && REQUEST_ID.test(body.requestId) ? body.requestId : null;
-    const run: RunningAsk | null = requestId
-      ? { userId: user.id, threadId: null, userMessageId: null, messageIds: [], stopped: false, settled: false }
-      : null;
-    if (requestId && run) this.running.set(requestId, run);
+    const run: RunningAsk = {
+      userId: user.id, threadId: null, userMessageId: null, messageIds: [], stopped: false, settled: false,
+    };
+    if (requestId) this.running.set(requestId, run);
 
     try {
       for await (const event of this.chat.ask({
@@ -243,20 +245,23 @@ export class ChatController {
         threadId: body?.threadId ?? null,
         question,
         replaceMessageId,
-        stopped: () => run?.stopped === true,
+        // Stop pressed, or nobody left to answer. Consulted only before the
+        // work starts (classification, then the charge); an answer already
+        // under way runs on and is saved.
+        stopped: () => run.stopped || !open,
       })) {
-        if (run) track(run, event);
+        track(run, event);
 
         // The advocate stopped this answer. The pipeline runs on to its end so
         // that whatever it charged and wrote can be undone below, but nothing
         // more of it is sent.
-        if (run?.stopped) continue;
+        if (run.stopped) continue;
 
         write(event);
 
         // Once the answer - or the reason there is none - has been sent, Stop
         // is too late: it was delivered, and undoing it would be a free answer.
-        if (run && (event.type === 'answer' || event.type === 'error')) run.settled = true;
+        if (event.type === 'answer' || event.type === 'error') run.settled = true;
       }
     } catch (err) {
       // ChatService handles its own failures and refunds; reaching here means
@@ -274,8 +279,10 @@ export class ChatController {
     }
 
     // The second pass - see ChatService.discardTurn. Whatever the abandoned
-    // answer charged or wrote after Stop is refunded and removed.
-    if (run?.stopped) {
+    // answer charged or wrote after Stop is refunded and removed. The same for
+    // a question whose client left before any work began: it ended without an
+    // answer, so the lone question is removed rather than left in the thread.
+    if (run.stopped || (!open && !run.settled)) {
       await this.chat
         .discardTurn({ user, threadId: run.threadId, userMessageId: run.userMessageId, messageIds: run.messageIds })
         .catch((err) => this.logger.error({ err, userId: user.id }, 'Could not undo a stopped answer'));

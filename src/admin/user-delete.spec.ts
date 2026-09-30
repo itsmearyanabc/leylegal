@@ -25,6 +25,7 @@ describe('admin account deletion', () => {
       {} as never, {} as never, {} as never, adminRepo as never, {} as never, {} as never, {} as never,
       {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
       db as never,
+      {} as never,
     );
     return { controller, adminRepo };
   }

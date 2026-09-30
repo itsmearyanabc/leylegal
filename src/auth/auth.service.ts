@@ -68,6 +68,8 @@ const LOCKOUT_SECONDS = 900;
  */
 const failures = new RateLimiter(LOCKOUT_SECONDS);
 
+/** Matches the one-hour guard in AuthRepository.touchSession. */
+export const SESSION_TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 const EMAIL_VERIFY_TTL_SECONDS = 86_400;
 const PASSWORD_RESET_TTL_SECONDS = 3600;
 
@@ -380,8 +382,13 @@ export class AuthService {
     if (!found) return null;
 
     // Fire-and-forget: the request must not wait on a bookkeeping write, and a
-    // failed one costs nothing but a stale timestamp.
-    void this.auth.touchSession(found.session.id).catch(() => undefined);
+    // failed one costs nothing but a stale timestamp. The write only happens
+    // when last_used_at is over an hour old, and the lookup has just returned
+    // it - so the query is skipped when it would change nothing, which saves a
+    // database round trip on nearly every signed-in request.
+    if (Date.now() - new Date(found.session.last_used_at).getTime() > SESSION_TOUCH_INTERVAL_MS) {
+      void this.auth.touchSession(found.session.id).catch(() => undefined);
+    }
 
     return found;
   }

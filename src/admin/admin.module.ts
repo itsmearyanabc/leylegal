@@ -4,6 +4,7 @@ import { EcourtsModule } from '../ecourts/ecourts.module';
 import { JobsModule } from '../jobs/jobs.module';
 import { KanoonModule } from '../kanoon/kanoon.module';
 import { UsersModule } from '../users/users.module';
+import { ChatAdmissionModule } from '../web/chat-admission.service';
 import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 import { AdminAuthController } from './admin-auth.controller';
 import { AdminUiController } from './admin-ui.controller';
@@ -21,7 +22,7 @@ import { AdminGuard } from './admin.guard';
   // at boot, which is why module resolution has its own test - and why this
   // list has twice been one entry short of a working deploy. See
   // app.wiring.spec.ts.
-  imports: [UsersModule, WhatsAppModule, KanoonModule, EcourtsModule, CreditsModule, JobsModule],
+  imports: [UsersModule, WhatsAppModule, KanoonModule, EcourtsModule, CreditsModule, JobsModule, ChatAdmissionModule],
   controllers: [AdminUiController, AdminAuthController, AdminController],
   providers: [AdminGuard],
 })
