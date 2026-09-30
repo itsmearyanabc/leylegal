@@ -40,9 +40,30 @@ export class AllExceptionsFilter implements ExceptionFilter {
         details = record.details;
       }
       if (code === 'INTERNAL_ERROR') code = httpStatusToCode(status);
+    } else if (carriesHttpStatus(exception)) {
+      /*
+       * Errors raised by Fastify and its plugins before any Nest handler runs.
+       *
+       * The rate limiter's 429, a 413 for a body over the limit, a 400 from
+       * the JSON parser: each is a plain Error with a `statusCode`, not an
+       * HttpException, so this filter used to report all of them as 500. The
+       * one that mattered was the rate limiter - ten clients on one laptop
+       * pass 300 requests a minute in under a second, and from then on every
+       * answer was "500 Internal Server Error". A server politely refusing an
+       * over-eager address read, to anyone load-testing it, as a server that
+       * had fallen over.
+       */
+      status = exception.statusCode;
+      code = httpStatusToCode(status);
+      if (status < 500) message = exception.message;
     }
 
-    if (status >= 500) {
+    if (status === HttpStatus.TOO_MANY_REQUESTS) {
+      // Not a warning per request: a client that ignores its 429s produces
+      // thousands a second, and logging each one turns a refused flood into a
+      // full disk. The limiter's own headers tell the client when to retry.
+      this.logger.debug({ requestId, url: request?.url }, 'Rate limited');
+    } else if (status >= 500) {
       this.logger.error(
         {
           requestId,
@@ -70,6 +91,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     void reply.status(status).send(payload);
   }
+}
+
+/** A plain error that already knows its HTTP status - Fastify's convention. */
+function carriesHttpStatus(exception: unknown): exception is Error & { statusCode: number } {
+  const statusCode = (exception as { statusCode?: unknown } | null)?.statusCode;
+  return exception instanceof Error && typeof statusCode === 'number' && statusCode >= 400 && statusCode <= 599;
 }
 
 function httpStatusToCode(status: number): string {

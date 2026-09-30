@@ -65,7 +65,10 @@ async function bootstrap(): Promise<void> {
       try {
         done(null, JSON.parse(body.toString('utf8')));
       } catch (err) {
-        done(err as Error, undefined);
+        // A body that is not JSON is the client's mistake: 400, not 500.
+        const parseError = err as Error & { statusCode?: number };
+        parseError.statusCode = 400;
+        done(parseError, undefined);
       }
     },
   );
