@@ -166,6 +166,7 @@ button { cursor:pointer; }
   display:flex; align-items:center; justify-content:center;
   font-weight:800; color:var(--accent-ink); font-size:15px; letter-spacing:-.02em;
 }
+.brand-mark .ley-logo { width:27px; height:27px; }
 .brand-text b { display:block; font-size:16px; letter-spacing:-.2px; }
 .brand-text span { font-size:12.5px; color:var(--muted); }
 
@@ -265,6 +266,7 @@ button { cursor:pointer; }
 }
 .msg.user .who-mark { background:var(--surface-3); color:var(--muted); }
 .msg.assistant .who-mark { background:var(--olive); color:#FFFFFF; font-size:11px; letter-spacing:-.02em; }
+.msg .who-mark .ley-logo { width:21px; height:21px; }
 .msg .body { flex:1; min-width:0; padding-top:3px; }
 .msg .body > *:first-child { margin-top:0; }
 .msg .body > *:last-child { margin-bottom:0; }
@@ -499,6 +501,7 @@ button { cursor:pointer; }
   font-weight:800; font-size:19px; letter-spacing:-.02em;
   animation:breathe 1.6s ease-in-out infinite;
 }
+.boot-mark .ley-logo { width:36px; height:36px; }
 .boot-name { font-weight:700; font-size:15px; letter-spacing:-.2px; }
 .boot-bar { width:140px; height:3px; border-radius:3px; background:var(--surface-3); overflow:hidden; }
 .boot-bar span {

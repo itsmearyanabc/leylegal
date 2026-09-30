@@ -181,7 +181,7 @@ const APP_HTML = `<!doctype html>
 </head>
 <body>
 <div id="boot" role="status" aria-label="Loading Ley Legal">
-  <div class="boot-mark">LEY</div>
+  <div class="boot-mark"><svg class="ley-logo" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><rect x="23" y="10" width="10" height="42" rx="4"/><circle cx="28" cy="12" r="5"/><circle cx="28" cy="48" r="5"/><rect x="10" y="52" width="16" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="4"/><rect x="26" y="52" width="22" height="24" rx="4"/><path d="M54 26 h18 v6 h-12 v14 h10 v6 h-10 v16 h12 v6 h-18 z"/><path d="M78 26 l7 22 l7 -22 h6 l-10 28 v18 h-6 v-18 l-10 -28 z"/></svg></div>
   <div class="boot-name">Ley Legal</div>
   <div class="boot-bar"><span></span></div>
 </div>

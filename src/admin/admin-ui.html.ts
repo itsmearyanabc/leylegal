@@ -82,6 +82,7 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
     background:var(--accent);
     display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--accent-ink);
     font-size:15px;letter-spacing:-.02em}
+  .brand-mark .ley-logo{width:27px;height:27px}
   .brand h1{font-size:18px;margin:0;font-weight:700;letter-spacing:-.01em}
   .brand .tag{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;
     letter-spacing:.1em;margin-top:1px}
@@ -178,6 +179,16 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
   .pill.bad{background:var(--red-light);color:var(--red);border:1px solid var(--red)}
   .pill.neutral{background:var(--panel-2);color:var(--muted);border:1px solid var(--border)}
   .pill.info{background:var(--olive-light);color:var(--olive-dark);border:1px solid var(--olive)}
+  /* ---------- one account ---------- */
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-bottom:14px}
+  .kv{display:grid;grid-template-columns:minmax(130px,max-content) 1fr;gap:7px 18px;margin:12px 0 0;font-size:13px}
+  .kv dt{color:var(--muted)}
+  .kv dd{margin:0;word-break:break-word}
+  .linkish{background:none;border:none;padding:0;color:var(--text);font-weight:600;text-align:left;cursor:pointer}
+  .linkish:hover{color:var(--olive-dark);text-decoration:underline}
+  .danger-zone{border-color:var(--red)}
+  .danger-zone h3{color:var(--red)}
+  .section-gap{margin-bottom:14px}
   :root[data-theme="dark"] .pill.warn{background:#3A2A12;color:var(--warn);border-color:#7A5A20}
   :root[data-theme="dark"] .pill.info{color:var(--olive)}
 
@@ -242,7 +253,7 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
 <div id="login">
   <form class="login-card" onsubmit="doLogin(event)">
     <div class="brand">
-      <div class="brand-mark">LEY</div>
+      <div class="brand-mark"><svg class="ley-logo" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><rect x="23" y="10" width="10" height="42" rx="4"/><circle cx="28" cy="12" r="5"/><circle cx="28" cy="48" r="5"/><rect x="10" y="52" width="16" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="4"/><rect x="26" y="52" width="22" height="24" rx="4"/><path d="M54 26 h18 v6 h-12 v14 h10 v6 h-10 v16 h12 v6 h-18 z"/><path d="M78 26 l7 22 l7 -22 h6 l-10 28 v18 h-6 v-18 l-10 -28 z"/></svg></div>
       <div>
         <h1>Ley Legal</h1>
         <div class="tag">Control Panel</div>
@@ -287,7 +298,7 @@ export const ADMIN_UI_HTML = String.raw`<!doctype html>
 <div id="app">
   <aside>
     <div class="brand">
-      <div class="brand-mark">LEY</div>
+      <div class="brand-mark"><svg class="ley-logo" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><rect x="23" y="10" width="10" height="42" rx="4"/><circle cx="28" cy="12" r="5"/><circle cx="28" cy="48" r="5"/><rect x="10" y="52" width="16" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="4"/><rect x="26" y="52" width="22" height="24" rx="4"/><path d="M54 26 h18 v6 h-12 v14 h10 v6 h-10 v16 h12 v6 h-18 z"/><path d="M78 26 l7 22 l7 -22 h6 l-10 28 v18 h-6 v-18 l-10 -28 z"/></svg></div>
       <div>
         <h1>Ley Legal</h1>
         <div class="tag">Control Panel</div>
@@ -512,7 +523,8 @@ function toggleTheme() {
 function renderNav(pending) {
   document.getElementById('nav').innerHTML = VIEWS.map(function (v) {
     var badge = (v.id === 'verifications' && pending) ? '<span class="badge">' + pending + '</span>' : '';
-    return '<button class="' + (v.id === VIEW ? 'active' : '') + '" onclick="go(\'' + v.id + '\')">' +
+    var on = v.id === VIEW || (VIEW === 'user' && v.id === 'users');
+    return '<button class="' + (on ? 'active' : '') + '" onclick="go(\'' + v.id + '\')">' +
            '<span class="ico">' + v.icon + '</span>' + esc(v.label) + badge + '</button>';
   }).join('');
 }
@@ -531,7 +543,7 @@ function go(view) {
     dashboard: viewDashboard, system: viewSystem, verifications: viewVerifications,
     users: viewUsers, credits: viewCredits, searches: viewSearches, messages: viewMessages,
     chats: viewChats, corpus: viewCorpus, settings: viewSettings, audit: viewAudit,
-    pricing: viewPricing
+    pricing: viewPricing, user: viewUser
   })[view];
 
   Promise.resolve()
@@ -977,7 +989,8 @@ function viewUsers() {
             return '<tr><td class="trunc" title="' + esc(u.email || u.phone_number || '') + '">' +
                 handle + '<button class="btn secondary sm" style="margin-left:6px;padding:1px 6px;font-size:10px" ' +
                 'onclick="copyId(\'' + u.id + '\')" title="Copy user id">id</button></td>' +
-              '<td>' + esc(u.full_name || '—') + '</td>' +
+              '<td><button class="linkish" onclick="openUser(\'' + u.id + '\')" title="Open this account">' +
+                esc(u.full_name || '(no name)') + '</button></td>' +
               '<td style="white-space:nowrap">' + channels + '</td>' +
               '<td><span class="pill neutral">' + esc(u.role.replace(/_/g, ' ').toLowerCase()) + '</span></td>' +
               '<td>' + statusPill(u.verification_status) + '</td>' +
@@ -1004,7 +1017,8 @@ function viewUsers() {
                 '</td>' +
               '<td>' + num(u.query_count) + '</td>' +
               '<td>' + when(u.last_active_at) + '</td>' +
-              '<td><select class="mono" style="font-size:11px;padding:3px" ' +
+              '<td style="white-space:nowrap"><button class="btn secondary sm" style="margin-right:6px" ' +
+                'onclick="openUser(\'' + u.id + '\')">Open</button><select class="mono" style="font-size:11px;padding:3px" ' +
               'onchange="setRole(\'' + u.id + '\', this.value)">' +
               // SUPER_ADMIN is not offered. It is total control of this panel,
               // and it was one click away from "guest lawyer" on every row. The
@@ -1093,6 +1107,198 @@ function setRole(id, role) {
     .then(function () { toast('Role updated to ' + role.replace(/_/g, ' ').toLowerCase() + '.'); })
     .catch(function (e) { toast(e.message, true); });
 }
+
+/* -------------------------------------------------------------------------
+   One account
+
+   Everything held about one advocate, the full data as a download, and
+   permanent deletion. The full phone number and the decrypted Bar Council
+   number appear only here: the list masks them, and opening an account is the
+   deliberate step that reveals them.
+   ------------------------------------------------------------------------- */
+function openUser(id) {
+  CACHE.userId = id;
+  go('user');
+}
+
+function viewUser() {
+  var id = CACHE.userId;
+  if (!id) { go('users'); return; }
+
+  return api('/users/' + id).then(function (d) {
+    CACHE.userDetail = d;
+    var u = d.user, c = d.counts;
+    var name = u.full_name || u.email || u.phone_number || 'Account';
+    var stamp = function (ts) { return ts ? new Date(ts).toLocaleString('en-IN') : '—'; };
+    var yes = function (b) { return b ? 'Yes' : 'No'; };
+    var kv = function (rows) {
+      return '<dl class="kv">' + rows.map(function (r) {
+        var v = r[1];
+        var shown = (v === null || v === undefined || v === '') ? '—' : (r[2] ? v : esc(v));
+        return '<dt>' + esc(r[0]) + '</dt><dd>' + shown + '</dd>';
+      }).join('') + '</dl>';
+    };
+    var table = function (heads, rows, cells, none) {
+      if (!rows || !rows.length) return '<div class="hint" style="margin:12px 0 0">' + esc(none) + '</div>';
+      return '<div class="scroll" style="margin-top:10px"><table><thead><tr>' +
+        heads.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
+        '</tr></thead><tbody>' +
+        rows.map(function (r) { return '<tr>' + cells(r).map(function (x) { return '<td>' + x + '</td>'; }).join('') + '</tr>'; }).join('') +
+        '</tbody></table></div>';
+    };
+    var google = (d.identities || []).map(function (i) { return i.email || i.provider; }).join(', ');
+
+    var profile = kv([
+      ['Name', u.full_name],
+      ['Email', u.email],
+      ['Email confirmed', u.email ? yes(u.email_verified_at) : '—'],
+      ['WhatsApp number', u.phone_number ? '<span class="mono">' + esc(u.phone_number) + '</span>' : null, true],
+      ['Number verified', u.phone_number ? yes(u.phone_verified_at) : '—'],
+      ['Signed up via', String(u.signup_source || '').replace(/_/g, ' ').toLowerCase()],
+      ['Password set', yes(u.has_password)],
+      ['Google sign-in', google || 'Not linked'],
+      ['Bar Council ID', u.bar_council_id ? '<span class="mono">' + esc(u.bar_council_id) + '</span>' : (u.bar_council_id_on_record ? 'On record, could not be decrypted' : null), true],
+      ['State', u.bar_council_state],
+      ['City', u.city],
+      ['Role', String(u.role || '').replace(/_/g, ' ').toLowerCase()],
+      ['Verification', statusPill(u.verification_status), true],
+      ['Language', u.preferred_language],
+      ['Blocked or opted out', yes(u.is_blocked)],
+      ['Created', stamp(u.created_at)],
+      ['Last active', stamp(u.last_active_at)],
+      ['Last web sign-in', stamp(u.last_web_login_at)],
+      ['User id', '<span class="mono">' + esc(u.id) + '</span>', true]
+    ]);
+
+    var held = kv([
+      ['Web chats', num(c.chat_threads) + ' threads, ' + num(c.chat_messages) + ' messages'],
+      ['WhatsApp messages', num(c.whatsapp_messages)],
+      ['Queries logged', num(c.search_history)],
+      ['Credit entries', num(c.credit_ledger)],
+      ['Orders', num(c.credit_orders)],
+      ['Signed-in devices', num(c.web_sessions)],
+      ['Linked sign-ins', num(c.user_identities)],
+      ['Pending codes and links', num(c.auth_tokens)],
+      ['Queued WhatsApp jobs', num(c.queued_jobs)],
+      ['Conversation state', d.conversationState ? d.conversationState.state : null],
+      ['WhatsApp memory', d.whatsappMemory ? d.whatsappMemory.turns + ' turns' : null]
+    ]);
+
+    var credits = kv([
+      ['Free', num(u.free_credits)],
+      ['Purchased or granted', num(u.paid_credits)],
+      ['Total', '<strong>' + num((u.free_credits || 0) + (u.paid_credits || 0)) + '</strong>', true]
+    ]) + table(['When', 'Change', 'Bucket', 'Balance after', 'Reason'], d.ledger, function (e) {
+      return [when(e.created_at),
+              '<span class="mono" style="color:' + (e.delta < 0 ? 'var(--red)' : 'var(--ok)') + '">' + (e.delta > 0 ? '+' : '') + e.delta + '</span>',
+              esc(String(e.bucket).toLowerCase()), num(e.balance_after), esc(e.reason || e.action || '')];
+    }, 'No credit movements.');
+
+    document.getElementById('main').innerHTML =
+      '<div class="head"><button class="btn secondary sm" onclick="go(\'users\')">← Users</button>' +
+      '<h2>' + esc(name) + '</h2><div class="grow"></div>' +
+      '<button class="btn secondary sm" onclick="exportUser()">Download all data (JSON)</button>' +
+      '<button class="btn danger sm" onclick="deleteUser()">Delete account…</button></div>' +
+
+      '<div class="cols">' +
+        '<div class="card"><h3>Profile</h3>' + profile + '</div>' +
+        '<div class="card"><h3>Credits</h3>' + credits + '</div>' +
+      '</div>' +
+
+      '<div class="card section-gap"><h3>Web chats</h3><p class="hint">Most recent 20 threads.</p>' +
+        table(['Title', 'Messages', 'Last message', 'Started'], d.threads, function (t) {
+          return [esc(t.title), num(t.message_count), when(t.last_message_at), when(t.created_at)];
+        }, 'No web chats.') + '</div>' +
+
+      '<div class="card section-gap"><h3>WhatsApp messages</h3><p class="hint">Most recent 20, both directions.</p>' +
+        table(['When', 'Direction', 'Type', 'Message', 'Status'], d.whatsappMessages, function (m) {
+          return [when(m.created_at), esc(String(m.direction).toLowerCase()), esc(m.message_type),
+                  '<span class="trunc" style="display:inline-block">' + esc(m.body || '') + '</span>',
+                  statusPill(m.status)];
+        }, 'No WhatsApp messages.') + '</div>' +
+
+      '<div class="card section-gap"><h3>Questions asked</h3><p class="hint">Most recent 20, from the query log.</p>' +
+        table(['When', 'Question', 'Intent', 'Results', 'Guardrail'], d.searches, function (s) {
+          return [when(s.created_at), '<span class="trunc" style="display:inline-block">' + esc(s.query_text) + '</span>',
+                  esc(String(s.intent || '').replace(/_/g, ' ').toLowerCase()), num(s.result_count),
+                  s.guardrail_flagged ? '<span class="pill warn">flagged</span>' : '—'];
+        }, 'No questions logged.') + '</div>' +
+
+      '<div class="cols">' +
+        '<div class="card"><h3>Signed-in devices</h3>' +
+          table(['Device', 'IP', 'Signed in', 'Last used', 'State'], d.sessions, function (s) {
+            var state = s.revoked_at ? 'signed out' : (new Date(s.expires_at) < new Date() ? 'expired' : 'active');
+            return ['<span class="trunc" style="display:inline-block;max-width:200px">' + esc(s.user_agent || '—') + '</span>',
+                    '<span class="mono">' + esc(s.ip_address || '—') + '</span>', when(s.created_at), when(s.last_used_at), esc(state)];
+          }, 'Never signed in on the web.') + '</div>' +
+        '<div class="card"><h3>Orders</h3>' +
+          table(['When', 'Credits', 'Amount', 'Status'], d.orders, function (o) {
+            return [when(o.created_at), num(o.credits), '₹' + num(Math.round(o.amount_paise / 100)), statusPill(o.status)];
+          }, 'No purchases.') + '</div>' +
+      '</div>' +
+
+      '<div class="card danger-zone"><h3>Delete this account</h3>' +
+        '<p class="hint">Permanently removes the account and everything below. The email address and WhatsApp number ' +
+        'become free again: signing up or messaging the bot afterwards starts a new, empty account. This cannot be undone, ' +
+        'so download the data first if you may need it.</p>' + held +
+        '<div style="margin-top:14px"><button class="btn secondary sm" onclick="exportUser()">Download all data (JSON)</button> ' +
+        '<button class="btn danger sm" onclick="deleteUser()">Delete account…</button></div></div>';
+  });
+}
+
+/** The whole account as one JSON file, uncapped and including every chat message. */
+function exportUser() {
+  var id = CACHE.userId;
+  if (!id) return;
+  api('/users/' + id + '/export').then(function (data) {
+    var url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }));
+    var a = document.createElement('a');
+    var handle = (data.user && (data.user.email || data.user.phone_number)) || id;
+    a.href = url;
+    a.download = 'leylegal-account-' + String(handle).replace(/[^A-Za-z0-9@._-]/g, '_') + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    toast('Downloaded the account data.');
+  }).catch(function (e) { toast(e.message, true); });
+}
+
+/**
+ * Delete the open account after the operator types its email or number.
+ *
+ * Typing the identifier, rather than pressing OK, is the guard against
+ * deleting the wrong row from a list of similar names.
+ */
+function deleteUser() {
+  var d = CACHE.userDetail;
+  if (!d) return;
+  var u = d.user, c = d.counts;
+  var handle = u.email || u.phone_number || u.id;
+  var norm = function (s) { return String(s || '').toLowerCase().replace(/[^a-z0-9@._-]/g, ''); };
+
+  var typed = prompt(
+    'Permanently delete ' + (u.full_name || handle) + ' and all of their data?\n\n' +
+    num(c.chat_threads) + ' web chats (' + num(c.chat_messages) + ' messages), ' +
+    num(c.whatsapp_messages) + ' WhatsApp messages, ' + num(c.search_history) + ' logged questions, ' +
+    num(c.credit_ledger) + ' credit entries, ' + num(c.credit_orders) + ' orders, ' +
+    num(c.web_sessions) + ' signed-in devices.\n\n' +
+    'This cannot be undone. Type ' + handle + ' to confirm:'
+  );
+  if (typed === null) return;
+  if (norm(typed) !== norm(handle)) {
+    toast('That did not match ' + handle + '. Nothing was deleted.', true);
+    return;
+  }
+
+  api('/users/' + u.id + '?confirm=' + encodeURIComponent(u.id), { method:'DELETE' })
+    .then(function () {
+      toast('Deleted. ' + handle + ' can now sign up or message the bot as a new account.');
+      CACHE.userId = null;
+      CACHE.userDetail = null;
+      go('users');
+    })
+    .catch(function (e) { toast(e.message, true); });
+}
+
 
 /* -------------------------------------------------------------------------
    Credits
@@ -1559,7 +1765,7 @@ function viewAudit() {
           rows.map(function (a) {
             return '<tr><td style="white-space:nowrap">' + when(a.changed_at) + '</td>' +
               '<td class="mono">' + esc(a.key) + '</td>' +
-              '<td><span class="pill ' + (a.action === 'CLEAR' ? 'warn' : 'info') + '">' + esc(a.action) + '</span></td>' +
+              '<td><span class="pill ' + (a.action === 'DELETE_USER' ? 'bad' : a.action === 'CLEAR' ? 'warn' : 'info') + '">' + esc(a.action) + '</span></td>' +
               '<td class="mono trunc">' + esc(a.new_preview || '—') + '</td>' +
               '<td>' + esc(a.changed_by) + '</td></tr>';
           }).join('') + '</tbody></table>'

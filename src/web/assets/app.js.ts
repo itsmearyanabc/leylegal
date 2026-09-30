@@ -399,8 +399,11 @@ function practiceFields(prefix, currentState, currentCity, required) {
              'value="' + esc(currentCity || '') + '"></div>';
 }
 
+/** The Ley Legal mark, as on the landing page. A constant, so safe for innerHTML. */
+const LEY_LOGO = '<svg class="ley-logo" viewBox="0 0 100 100" fill="currentColor" aria-hidden="true"><rect x="23" y="10" width="10" height="42" rx="4"/><circle cx="28" cy="12" r="5"/><circle cx="28" cy="48" r="5"/><rect x="10" y="52" width="16" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="4"/><rect x="26" y="52" width="22" height="24" rx="4"/><path d="M54 26 h18 v6 h-12 v14 h10 v6 h-10 v16 h12 v6 h-18 z"/><path d="M78 26 l7 22 l7 -22 h6 l-10 28 v18 h-6 v-18 l-10 -28 z"/></svg>';
+
 function brandMarkup() {
-  return '<div class="brand"><div class="brand-mark">LEY</div>' +
+  return '<div class="brand"><div class="brand-mark" title="Ley Legal">' + LEY_LOGO + '</div>' +
     '<div class="brand-text"><b>Ley Legal</b>' +
     '<span>Legal research for Indian advocates</span></div></div>';
 }
@@ -1068,7 +1071,9 @@ function renderLiveStages(live) {
 
   const wrap = el('div', 'msg assistant');
   wrap.id = 'live-stages';
-  wrap.appendChild(el('div', 'who-mark', 'LEY'));
+  const stageMark = el('div', 'who-mark');
+  stageMark.innerHTML = LEY_LOGO;
+  wrap.appendChild(stageMark);
 
   const body = el('div', 'body');
   const stages = el('div', 'stages');
@@ -1190,7 +1195,8 @@ function renderMessage(message) {
   const wrap = el('div', 'msg ' + message.role);
 
   const mark = el('div', 'who-mark');
-  mark.textContent = message.role === 'user' ? initials(state.user) : 'LEY';
+  if (message.role === 'user') mark.textContent = initials(state.user);
+  else mark.innerHTML = LEY_LOGO;
   wrap.appendChild(mark);
 
   const body = el('div', 'body');

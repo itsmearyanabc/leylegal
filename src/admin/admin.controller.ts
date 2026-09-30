@@ -6,13 +6,14 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  NotFoundException,
   Param,
   Post,
   Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { maskPhone } from '../common/logger';
+import { getLogger, maskPhone } from '../common/logger';
 
 /**
  * The roles this panel may hand out.
@@ -22,7 +23,7 @@ import { maskPhone } from '../common/logger';
  * not a privilege over the panel itself.
  */
 const ASSIGNABLE_ROLES = ['GUEST_LAWYER', 'VERIFIED_ADVOCATE', 'LEGAL_AUDITOR'];
-import { CreditPlanPeriod } from '../database/types';
+import { CreditPlanPeriod, UserRow } from '../database/types';
 import { CreditsService } from '../credits/credits.service';
 import { DatabaseService } from '../database/database.service';
 import { AdminRepository } from '../database/repositories/admin.repository';
@@ -43,6 +44,27 @@ import { WhatsAppApiService } from '../whatsapp/whatsapp-api.service';
 import { AdminGuard } from './admin.guard';
 import { AuthenticatedRequest } from './admin.guard';
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A malformed id is a 400, not a Postgres cast error surfacing as a 500. */
+function requireUuid(value: string): string {
+  if (!UUID.test(value ?? '')) {
+    throw new BadRequestException({ code: 'BAD_USER_ID', message: 'That is not a valid user id.' });
+  }
+  return value.toLowerCase();
+}
+
+function notFound(): NotFoundException {
+  return new NotFoundException({ code: 'NOT_FOUND', message: 'No account with that id.' });
+}
+
+/** "a•••@gmail.com" - enough to recognise in the audit log, not enough to contact. */
+export function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!domain) return '•••';
+  return `${local.slice(0, 1)}•••@${domain}`;
+}
+
 const int = (v: string | undefined, fallback: number, max = 500): number => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? Math.min(n, max) : fallback;
@@ -59,6 +81,8 @@ const int = (v: string | undefined, fallback: number, max = 500): number => {
 @Controller('admin')
 @UseGuards(AdminGuard)
 export class AdminController {
+  private readonly logger = getLogger().child({ module: 'admin' });
+
   constructor(
     private readonly users: UsersService,
     private readonly userRepo: UserRepository,
@@ -283,6 +307,95 @@ export class AdminController {
 
     await this.userRepo.setRole(userId, role as 'GUEST_LAWYER');
     return { updated: true, role };
+  }
+
+  // --- One account ------------------------------------------------------------
+
+  /**
+   * Everything held about one account.
+   *
+   * The full phone number and the decrypted Bar Council number are shown here
+   * and nowhere else in the panel: the list masks them, and opening one account
+   * is the deliberate step that reveals them. The password hash and session
+   * token hashes are never returned - they are credentials, not information.
+   */
+  @Get('users/:userId')
+  async userDetail(@Param('userId') userId: string) {
+    const detail = await this.adminRepo.userDetail(requireUuid(userId));
+    if (!detail) throw notFound();
+    return { ...detail, user: await this.presentUser(detail.user) };
+  }
+
+  /** The same, uncapped and including every chat message, for keeping before a delete. */
+  @Get('users/:userId/export')
+  async exportUser(@Param('userId') userId: string) {
+    const detail = await this.adminRepo.exportUser(requireUuid(userId));
+    if (!detail) throw notFound();
+    return { exportedAt: new Date().toISOString(), ...detail, user: await this.presentUser(detail.user) };
+  }
+
+  /**
+   * Permanently delete an account and all data associated with it.
+   *
+   * `confirm` must repeat the user id. The panel asks the operator to type the
+   * account's email or number before it sends the request; this is the server's
+   * own guard against a stray or replayed call deleting the wrong row.
+   *
+   * Super admins cannot be deleted here, for the same reason they cannot be
+   * created here: demote first, then delete, so removing total control of the
+   * panel is two deliberate acts rather than one click.
+   */
+  @Delete('users/:userId')
+  async deleteUser(
+    @Param('userId') userId: string,
+    @Query('confirm') confirm: string | undefined,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const id = requireUuid(userId);
+    if (confirm !== id) {
+      throw new BadRequestException({
+        code: 'CONFIRMATION_REQUIRED',
+        message: 'Deleting an account requires ?confirm=<the same user id>.',
+      });
+    }
+
+    const [target] = await this.db.sql<{ role: string }[]>`SELECT role::text AS role FROM users WHERE id = ${id}`;
+    if (!target) throw notFound();
+    if (target.role === 'SUPER_ADMIN') {
+      throw new BadRequestException({
+        code: 'SUPER_ADMIN_PROTECTED',
+        message: 'Demote this account from super admin before deleting it.',
+      });
+    }
+
+    const report = await this.adminRepo.deleteUserCompletely(id);
+    if (!report) throw notFound();
+
+    const who = report.email ? maskEmail(report.email) : maskPhone(report.phone ?? '');
+    const r = report.removed;
+    const summary =
+      `${who}: ${r.chat_threads} threads, ${r.chat_messages} chat messages, ` +
+      `${r.whatsapp_messages} WhatsApp messages, ${r.search_history} queries, ` +
+      `${r.credit_ledger} ledger rows, ${r.credit_orders} orders`;
+    const by = req.admin?.email ?? 'admin';
+
+    await this.adminRepo
+      .auditUserDeletion(id, summary, by)
+      .catch((err) => this.logger.error({ err, userId: id }, 'Account deleted but the audit row failed'));
+    this.logger.warn({ userId: id, by, removed: r }, 'Account deleted from the admin panel');
+
+    return { deleted: true, removed: r };
+  }
+
+  /** The user row as the panel may see it: credentials out, the Bar Council number decrypted. */
+  private async presentUser(row: Record<string, unknown>) {
+    const { password_hash, bar_council_id_enc, bar_council_id_hash, ...rest } = row;
+    return {
+      ...rest,
+      has_password: Boolean(password_hash),
+      bar_council_id: await this.users.revealBarCouncilId(row as unknown as UserRow),
+      bar_council_id_on_record: Boolean(bar_council_id_hash),
+    };
   }
 
   // --- Settings -------------------------------------------------------------
