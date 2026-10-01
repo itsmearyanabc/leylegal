@@ -311,6 +311,7 @@ button { cursor:pointer; }
 .case-rows { display:grid; grid-template-columns:auto 1fr; gap:0; }
 .case-rows dt { padding:9px 17px; font-size:12.5px; color:var(--muted); border-bottom:1px solid var(--border-soft); }
 .case-rows dd { padding:9px 17px; margin:0; font-size:13.5px; border-bottom:1px solid var(--border-soft); }
+.case-rows dd.na { color:var(--dim); }
 .case-rows dt:last-of-type, .case-rows dd:last-of-type { border-bottom:none; }
 
 /* Sources and citations */

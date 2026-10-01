@@ -227,6 +227,25 @@ describe('case status', () => {
     expect(credits.refund).toHaveBeenCalled();
     expect(answers(events)).toContain('No case found');
   });
+
+  it('does not charge for, or look up, a filing number sent as a CNR', async () => {
+    // "Check the status of CNR 831/2024" - the filing number off the card above
+    // it - was charged, sent to eCourts and answered "No case found for CNR
+    // 831/2024", as though the case did not exist.
+    const { service, credits, ecourts, chats } = build({ intent: 'CASE_STATUS', cnr: null });
+    (chats as Record<string, unknown>).caseCardsInThread = jest.fn().mockResolvedValue([
+      { cnr: 'DLCT010012342024', filingNumber: '831/2024', caseNumber: '79/2024', petitioner: 'Idfc First Bank', respondent: 'Aditya Bhatia 6897' },
+    ]);
+
+    const events = await ask(service, 'Check the status of CNR 831/2024');
+
+    expect(credits.spend).not.toHaveBeenCalled();
+    expect(ecourts.lookup).not.toHaveBeenCalled();
+    expect(answers(events)).toContain('*831/2024* is not a CNR - it is the filing number of *DLCT010012342024*');
+    expect(answers(events)).not.toContain('No case found');
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.charged).toBe(0);
+  });
 });
 
 describe('section lookup', () => {

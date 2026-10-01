@@ -8,7 +8,13 @@ import { hashPassword, needsRehash, passwordProblem, verifyPassword } from './pa
  * and aimed at the properties that would be silently wrong rather than at
  * coverage. A bug here does not throw; it produces a login form that accepts
  * the wrong password, or one that rejects the right one after a config change.
+ *
+ * Two or three derivations a test take well under a second alone, and over
+ * jest's default five seconds when the full suite shares the CPU - which failed
+ * a run on time, not on a password. Hence the longer limit.
  */
+jest.setTimeout(30_000);
+
 describe('hashPassword / verifyPassword', () => {
   it('accepts the correct password and rejects a wrong one', async () => {
     const hash = await hashPassword('a-perfectly-ordinary-password');

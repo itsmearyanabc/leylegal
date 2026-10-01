@@ -9,6 +9,7 @@ import {
   extractCnr,
   extractOrderReference,
   extractSectionReference,
+  isValidCnr,
   namedActs,
   recodifiedReference,
   normaliseActCode,
@@ -286,7 +287,7 @@ export class IntentService {
     return {
       intent: VALID_INTENTS.includes(rawIntent) ? rawIntent : 'GENERAL_LEGAL',
       language: this.normaliseLanguage(parsed.language),
-      cnrNumber: parsed.cnr_number ? String(parsed.cnr_number).toUpperCase() : null,
+      cnrNumber: cnrFrom(parsed.cnr_number),
       sectionNumber: parsed.section_number ? String(parsed.section_number).toUpperCase() : null,
       actCode: normaliseActCode(parsed.act_code ? String(parsed.act_code) : null),
       actName: typeof parsed.act_name === 'string' && parsed.act_name.trim() ? parsed.act_name.trim().slice(0, 160) : null,
@@ -354,6 +355,21 @@ export class IntentService {
  * anticipatory bail" parses as a cause title, and sending it to a name lookup
  * would answer a legal question with "no judgment found by that name".
  */
+/**
+ * The model's cnr_number, only if it is a CNR.
+ *
+ * It was taken as given. "Check the status of CNR 831/2024" - a filing number,
+ * copied off the case card above it - came back with cnr_number "831/2024", and
+ * the lookup was charged, sent to eCourts, refunded, and reported as "No case
+ * found for CNR 831/2024": as though the case did not exist, when what was sent
+ * was never a CNR at all.
+ */
+function cnrFrom(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const cnr = String(value).toUpperCase().replace(/[\s\-_/]/g, '');
+  return isValidCnr(cnr) ? cnr : null;
+}
+
 export function asksAboutNamedJudgment(text: string): boolean {
   if (!extractCaseName(text)) return false;
   return (

@@ -1506,36 +1506,15 @@ function renderCaseStatus(data) {
     [data.petitioner, data.respondent].filter(Boolean).join(' vs ') || 'Case record'));
   card.appendChild(head);
 
+  // Which rows, in what order, and the disposed-case rule all come from the
+  // server (case-status.rows.ts), where the WhatsApp card is built from the
+  // same definition. This drew its own from the raw record and drifted: other
+  // labels, empty rows dropped, and a disposed case's past "next hearing"
+  // printed as a date.
   const rows = el('dl', 'case-rows');
-  const fields = [
-    ['Status', data.statusLabel || data.status],
-    ['Decided', data.decisionDate],
-    ['Nature of disposal', data.disposalNature],
-    ['FIR', data.fir],
-    ['Stage', data.stage],
-    ['Court', data.court],
-    ['Judge', data.judge],
-    ['Case type', data.caseType],
-    // The three numbers an advocate quotes, in the order the WhatsApp card
-    // prints them. Filing and registration genuinely differ on real records -
-    // "9623/2024" and "138/2024" on the first one - so they are never merged.
-    ['Filing number', data.filingNumber],
-    ['Registration number', data.caseNumber],
-    ['CNR case number', data.cnrCaseNumber],
-    ['Filed', data.filingDate],
-    ['Registered', data.registrationDate],
-    ['First hearing', data.firstHearingDate],
-    ['Next hearing', data.nextHearingDate],
-    ['Last hearing', data.lastHearingDate],
-    ['Petitioner advocate', data.petitionerAdvocate],
-    ['Respondent advocate', data.respondentAdvocate],
-    ['Record updated', data.recordUpdated],
-  ];
-
-  for (const [label, value] of fields) {
-    if (!value) continue;
-    rows.appendChild(el('dt', null, label));
-    rows.appendChild(el('dd', null, value));
+  for (const row of data.rows || []) {
+    rows.appendChild(el('dt', null, row.label));
+    rows.appendChild(el('dd', row.value === 'Not available' ? 'na' : null, row.value));
   }
   card.appendChild(rows);
 
@@ -1553,6 +1532,14 @@ function renderCaseStatus(data) {
       'on this deployment.';
     wrap.appendChild(warning);
   }
+
+  // How old the record is - the data is a scrape of the court's site, and a
+  // hearing date from a record refreshed months ago is a stale date.
+  const caveat = precedentCaveat();
+  if (data.recordUpdated) {
+    caveat.insertBefore(el('div', null, 'Record last updated from eCourts: ' + data.recordUpdated), caveat.firstChild);
+  }
+  wrap.appendChild(caveat);
 
   return wrap;
 }

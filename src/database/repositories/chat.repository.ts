@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { JSONValue, TransactionSql } from 'postgres';
+import type { EarlierCase } from '../../ecourts/cnr-help';
 import { DatabaseService } from '../database.service';
 import { ChatMessageRow, ChatRole, ChatThreadRow, QueryIntent } from '../types';
 
@@ -202,6 +203,26 @@ export class ChatRepository {
       ORDER BY created_at
     `;
     return rows;
+  }
+
+  /**
+   * The case cards shown earlier in a thread, newest first - what a number like
+   * "831/2024" typed after one of them may have been copied from.
+   */
+  async caseCardsInThread(threadId: string, limit = 20): Promise<EarlierCase[]> {
+    return this.db.sql<EarlierCase[]>`
+      SELECT structured->>'cnr'          AS cnr,
+             structured->>'filingNumber' AS "filingNumber",
+             structured->>'caseNumber'   AS "caseNumber",
+             structured->>'petitioner'   AS petitioner,
+             structured->>'respondent'   AS respondent
+        FROM chat_messages
+       WHERE thread_id = ${threadId}
+         AND role = 'assistant'
+         AND structured->>'kind' = 'caseStatus'
+       ORDER BY created_at DESC
+       LIMIT ${limit}
+    `;
   }
 
   /**

@@ -1,4 +1,5 @@
 import { statuteLabel } from '../ai/prompts';
+import { caseStatusRows } from '../ecourts/case-status.rows';
 import { CaseStatus } from '../ecourts/ecourts.service';
 import { StatuteRow } from '../database/types';
 
@@ -527,70 +528,19 @@ export const RESUBSCRIBED = [
 export const MOCK_MODE_NOTICE =
   '\n\n_⚠️ No AI provider is configured, so this is a placeholder answer._';
 
-/** Render an eCourts result as a WhatsApp message. */
 /**
- * The case status card.
+ * The case status card, as a WhatsApp message.
  *
- * Every field is always printed, "Not available" where the court record has
- * nothing. A card whose shape changes with the data is hard to read down a
- * phone screen, and a missing row reads as an omission by the bot rather than
- * a gap in the record.
- *
- * ## The disposed-case rule
- *
- * A disposed case whose "next hearing" is in the past is showing a date that
- * already happened for a matter that is over. Left in, an advocate scanning
- * quickly reads it as an upcoming listing. It is blanked rather than removed,
- * so the row still exists and the absence is visible.
+ * The rows - which fields, in what order, and the disposed-case rule - are
+ * caseStatusRows(), shared with the website so the two cannot drift apart.
+ * This adds what only a chat message has: the heading, how fresh the record
+ * is, the caveat and the way back to the menu.
  */
-export function formatCaseStatus(status: CaseStatus): string {
-  const value = (v: string | null): string => (v && v.trim() ? v.trim() : 'Not available');
-
-  const nextHearing =
-    status.status === 'DISPOSED' && isPast(status.nextHearingDate)
-      ? 'Not available'
-      : value(status.nextHearingDate);
-
+export function formatCaseStatus(status: CaseStatus, today?: string): string {
   return [
     `*Case status — ${status.cnr}*`,
     '',
-    `• Case Type: ${value(status.caseType)}`,
-    // Two different numbers. This printed `caseNumber` on both lines, which
-    // asserted they were the same - on the first real record they were
-    // "9623/2024" and "138/2024".
-    `• Filing Number: ${value(status.filingNumber)}`,
-    `• Filing Date: ${value(status.filingDate)}`,
-    `• Registration Number: ${value(status.caseNumber)}`,
-    `• Registration Date: ${value(status.registrationDate)}`,
-    `• CNR Number: ${status.cnr}`,
-    // eCourts' 15-digit case number - what the portal's case-number search takes.
-    `• CNR Case Number: ${value(status.cnrCaseNumber)}`,
-    // Was printing lastHearingDate under a "First Hearing" label. The two are
-    // the same day only on a case that has been heard once.
-    `• First Hearing Date: ${value(status.firstHearingDate)}`,
-    `• Last Hearing Date: ${value(status.lastHearingDate)}`,
-    `• Next Hearing Date: ${nextHearing}`,
-    // The provider's own label - "Dismissed" - not the three-way flag, which
-    // printed a dismissed case as UNKNOWN.
-    `• Case Status: ${value(status.statusLabel ?? status.status)}`,
-    // Decided matters only. On a pending case these are empty by definition,
-    // and a "Not available" there reads as though the date is missing.
-    ...(status.status === 'DISPOSED'
-      ? [
-          `• Disposal Date: ${value(status.decisionDate)}`,
-          `• Nature of Disposal: ${value(status.disposalNature)}`,
-        ]
-      : []),
-    `• Stage of Case: ${value(status.stage)}`,
-    // The court was mapped and then never printed - so a card told an advocate
-    // everything about a matter except which court it is in.
-    `• Court: ${value(status.court)}`,
-    `• Judge: ${value(status.judge)}`,
-    `• Petitioner and Advocate: ${pair(status.petitioner, status.petitionerAdvocate)}`,
-    `• Respondent and Advocate: ${pair(status.respondent, status.respondentAdvocate)}`,
-    // Criminal matters only - a civil case has no FIR, and saying so on every
-    // civil card is noise.
-    ...(status.fir ? [`• FIR: ${status.fir}`] : []),
+    ...caseStatusRows(status, today).map((row) => `• ${row.label}: ${row.value}`),
     // How old this record is. The data is a scrape of the court's site, and a
     // hearing date from a record last refreshed months ago is a stale date.
     ...(status.recordUpdated ? ['', `_Record last updated from eCourts: ${status.recordUpdated}_`] : []),
@@ -604,21 +554,6 @@ export function formatCaseStatus(status: CaseStatus): string {
   ]
     .filter((l) => l !== '')
     .join('\n');
-}
-
-/** "Party (Advocate)", degrading to whichever half the record actually has. */
-function pair(party: string | null, advocate: string | null): string {
-  if (!party && !advocate) return 'Not available';
-  if (!advocate) return party as string;
-  if (!party) return `Not available (${advocate})`;
-  return `${party} (${advocate})`;
-}
-
-function isPast(date: string | null): boolean {
-  if (!date) return false;
-  const parsed = new Date(date);
-  if (Number.isNaN(parsed.getTime())) return false;
-  return parsed.getTime() < Date.now();
 }
 
 /** Compact statute card, used when the LLM is unavailable. */

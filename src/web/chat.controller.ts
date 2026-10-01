@@ -21,6 +21,7 @@ import { getLogger } from '../common/logger';
 import { CreditsService } from '../credits/credits.service';
 import { ChatRepository } from '../database/repositories/chat.repository';
 import { ChatMessageRow } from '../database/types';
+import { withCaseRows } from '../ecourts/case-status.rows';
 import { ChatEvent, ChatService } from './chat.service';
 
 /** Longest question accepted. Generous for legal prose, bounded for the model bill. */
@@ -351,7 +352,9 @@ function toPublicMessage(row: ChatMessageRow) {
     content: row.content,
     intent: row.intent,
     citations: row.citations ?? [],
-    structured: row.structured,
+    // A case card's rows are worked out here, by the rules WhatsApp prints
+    // with - so a card stored before a rule changed reads by the new one.
+    structured: withCaseRows(row.structured),
     creditsCharged: row.credits_charged,
     guardrailFlagged: row.guardrail_flagged,
     error: row.error_detail,

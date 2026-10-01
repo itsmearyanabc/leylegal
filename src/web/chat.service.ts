@@ -18,6 +18,8 @@ import { AnalyticsRepository } from '../database/repositories/analytics.reposito
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { ChatRepository } from '../database/repositories/chat.repository';
 import { ChatMessageRow, PrecedentRow, UserRow } from '../database/types';
+import { withCaseRows } from '../ecourts/case-status.rows';
+import { caseNumberIn, cnrNeededReply, matchEarlierCase } from '../ecourts/cnr-help';
 import { CnrNotFoundError, EcourtsService } from '../ecourts/ecourts.service';
 import { StageChannel } from './stage-channel';
 
@@ -216,6 +218,14 @@ export class ChatService {
       return;
     }
 
+    // A case-status question without a CNR - "status of CNR 831/2024", a filing
+    // number. It used to be charged and sent to eCourts as one, and answered
+    // "No case found". There is nothing to look up; say what is needed, free.
+    if (intent.intent === 'CASE_STATUS') {
+      yield* this.askForCnr({ user, threadId, question });
+      return;
+    }
+
     const isPrecedentSearch = intent.intent === 'PRECEDENT_SEARCH';
     const cost = isPrecedentSearch ? CREDIT_COST.PRECEDENT_SEARCH : CREDIT_COST.SECTION_LOOKUP;
 
@@ -312,6 +322,36 @@ export class ChatService {
   // ---------------------------------------------------------------------------
   // Case status - free, no model call
   // ---------------------------------------------------------------------------
+
+  /**
+   * A case-status question with no CNR in it: what is needed, and - when the
+   * number typed is one of a case looked up earlier in this chat - that case's
+   * CNR. No eCourts call and no charge (see cnr-help.ts).
+   */
+  private async *askForCnr(input: { user: UserRow; threadId: string; question: string }): AsyncGenerator<ChatEvent> {
+    const { user, threadId, question } = input;
+    const started = Date.now();
+
+    const typed = caseNumberIn(question);
+    const match = typed ? matchEarlierCase(typed, await this.chats.caseCardsInThread(threadId)) : null;
+
+    const message = await this.chats.appendMessage({
+      threadId,
+      userId: user.id,
+      role: 'assistant',
+      content: cnrNeededReply(typed, match),
+      intent: 'CASE_STATUS',
+      latencyMs: Date.now() - started,
+      creditsCharged: 0,
+    });
+
+    yield {
+      type: 'answer',
+      message: toPublic(message),
+      credits: await this.credits.peek(user.id, user.role),
+      charged: 0,
+    };
+  }
 
   private async *answerCaseStatus(input: {
     user: UserRow;
@@ -735,7 +775,7 @@ function toPublic(row: ChatMessageRow): PublicChatMessage {
     content: row.content,
     intent: row.intent,
     citations: row.citations ?? [],
-    structured: row.structured,
+    structured: withCaseRows(row.structured),
     creditsCharged: row.credits_charged,
     guardrailFlagged: row.guardrail_flagged,
     error: row.error_detail,

@@ -6,6 +6,7 @@ import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
 import { isValidCnr } from '../ai/legal-patterns';
 import { SettingsService } from '../settings/settings.service';
+import { informativeDisposal, realCaseType } from './case-status.rows';
 
 export interface CaseStatus {
   cnr: string;
@@ -478,8 +479,20 @@ export class EcourtsService {
 
     // The registration number is the one an advocate quotes - "W.P.(C) 138/2024"
     // - not the internal 15-digit `caseNumber`, which appears on nothing.
+    //
+    // A code missing from the provider's own table comes back labelled
+    // "Unrecognized case type" - which was printed as the case type, and in
+    // front of the registration number ("Unrecognized case type 79/2024"). The
+    // court's own text for the type is in caseTypeRaw.
     const caseTypeLabel =
-      label('caseType', text(data, 'caseType')) ?? text(data, 'caseTypeRaw', 'caseType', 'case_type');
+      [
+        label('caseType', text(data, 'caseType')),
+        text(data, 'caseTypeRaw'),
+        text(data, 'caseType'),
+        text(data, 'case_type'),
+      ]
+        .map(realCaseType)
+        .find((type) => type !== null) ?? null;
     /*
      * The registration number, and only the registration number.
      *
@@ -509,7 +522,12 @@ export class EcourtsService {
         text(data, 'cnrCaseNumber', 'cnr_case_number') ?? cnrCaseNumberFrom(cnr, text(data, 'cnrCourtCode')),
       statusLabel: label('caseStatus', rawStatus) ?? rawStatus,
       decisionDate: day(text(data, 'decisionDate', 'decision_date', 'disposalDate')),
-      disposalNature: text(data, 'disposalTypeRaw', 'disposal_type', 'disposalType'),
+      // "DISPOSED" under "Nature of disposal", beside a status of Disposed,
+      // says nothing; "DISMISSED AS WITHDRAWN" is what the field is for.
+      disposalNature: informativeDisposal(
+        text(data, 'disposalTypeRaw', 'disposal_type', 'disposalType'),
+        label('caseStatus', rawStatus) ?? rawStatus,
+      ),
       fir: firFrom(data.firDetails),
       recordUpdated: day(text(entity, 'dateModified')),
       caseType: caseTypeLabel,
