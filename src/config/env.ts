@@ -319,6 +319,18 @@ const envSchema = z.object({
    */
   CREDITS_SIGNUP_BONUS: z.coerce.number().int().min(0).max(10_000).default(10),
 
+  /**
+   * The landing page's claims that only the operator can vouch for - each one
+   * shows as "Live" only when listed here: T2 (a named case is found or
+   * reported not found), T3 (no answer, no charge), T4 (section numbers from
+   * the bare acts), S1 (student verification), REVIEW (weekly legal review),
+   * V2 (every citation checked against the judgments database). Space- or
+   * comma-separated. WhatsApp and payments follow their own configuration and
+   * are not set here. Empty - no claim - by default: a claim shown as live that
+   * is not is the one mistake the page cannot make.
+   */
+  LANDING_CLAIMS: z.string().default(''),
+
   // --- End-user web sessions ------------------------------------------------
   SESSION_COOKIE_NAME: z.string().min(1).default('vs_session'),
   /**

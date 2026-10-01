@@ -10,8 +10,9 @@ import { AppEnv } from '../config/env';
 import { CREDIT_COST } from '../credits/credits.service';
 import { SettingsService } from '../settings/settings.service';
 import { LANDING_CSS } from './assets/landing.css';
+import { LEGAL_CSS } from './assets/legal.css';
 import { renderPrivacy } from './assets/legal.html';
-import { LandingView, renderLanding } from './assets/landing.html';
+import { Claim, LandingView, operatorClaims, renderLanding, waDigits } from './assets/landing.html';
 
 /**
  * The public front page.
@@ -110,7 +111,7 @@ export class LandingController {
           year: new Date().getFullYear(),
           updated: new Date().toISOString().slice(0, 10),
         },
-        LANDING_CSS,
+        LEGAL_CSS,
       ),
     );
   }
@@ -179,8 +180,26 @@ export class LandingController {
       // so asking it is the only way to be right about this.
       answersLive: !this.providers.isSynthesisMocked,
 
+      claims: this.claims(),
+      previewClaims: !this.env.isProduction,
+
       publicUrl: this.env.APP_PUBLIC_URL,
       year: new Date().getFullYear(),
     };
+  }
+
+  /**
+   * The claim switches that are on.
+   *
+   * WhatsApp and payments are facts of configuration: open when the bot can
+   * send and there is a number to give out, payable when Razorpay has both
+   * halves of its key. The rest are claims about how answers are produced,
+   * which only the operator can vouch for - LANDING_CLAIMS.
+   */
+  private claims(): Claim[] {
+    const on: Claim[] = operatorClaims(this.env.LANDING_CLAIMS);
+    if (this.settings.whatsappConfigured && waDigits(this.settings.get('WHATSAPP_DISPLAY_NUMBER'))) on.push('WA');
+    if (this.settings.razorpayConfigured) on.push('PAY');
+    return on;
   }
 }

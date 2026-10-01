@@ -1,12 +1,42 @@
 /**
- * Styles for the public landing page - the v2 design of 1 October 2026,
- * verbatim from the designer. The palette is the one app.css.ts and the admin
- * panel share: near-black actions, and green spent on verification only.
+ * Styles for the privacy page - the first landing page's stylesheet.
  *
- * String.raw, because the stylesheet has CSS escapes ("\201C") that a plain
- * template literal would read as its own.
+ * The landing page moved to its v2 design (landing.css.ts, 1 Oct 2026). The
+ * privacy page was built on this one and is fetched by Meta before it will
+ * publish the WhatsApp app, so it keeps it unchanged rather than being
+ * re-laid-out by a redesign it was not part of. What follows is the original
+ * note, written for the landing page.
+ *
+ * Styles for the public landing page.
+ *
+ * ## Why this does not share the app's palette
+ *
+ * The app is a tool: olive carries identity, red means something is wrong, and
+ * the colour is load-bearing because an advocate reads state off it all day.
+ * The landing page is a different job. It has one thing to do - explain the
+ * product and get out of the way - and the register that does that best is the
+ * one Apple and OpenAI both landed on independently: near-monochrome, a great
+ * deal of white space, type doing the work that decoration usually does, and
+ * exactly one accent, spent where it means something.
+ *
+ * So the palette here is greyscale with a single green, used only for
+ * verification - the one idea this product is actually built around. Nothing
+ * else on the page is coloured, which is what makes that green read as a
+ * statement rather than as styling.
+ *
+ * ## Constraints
+ *
+ * **It renders without JavaScript.** The app requires JS and says so; a landing
+ * page that does is invisible to crawlers, to WhatsApp's link preview and to
+ * anyone behind a restrictive browser policy. The menu is a `<details>`, the
+ * FAQ is a `<details>`, and the entrance animation is pure CSS. The only script
+ * is the theme toggle, and without it the page is simply light.
+ *
+ * **It agrees with the app about dark mode.** The inline head script reads the
+ * same `vs-theme` key the app writes, before first paint, so crossing from here
+ * into `/app` never flashes.
  */
-export const LANDING_CSS = String.raw`
+export const LEGAL_CSS = String.raw`
 /* ==========================================================================
    Tokens
 
@@ -470,153 +500,5 @@ p { margin:0; }
   html { scroll-behavior:auto; }
   .rise { animation:none; }
   * { transition-duration:.01ms !important; }
-}
-
-/* ==========================================================================
-   v2 additions (1 Oct 2026)
-   ========================================================================== */
-
-/* --- Claim switches --------------------------------------------------------
-   See the developer notes. A data-needs element is hidden until
-   its switch is in html[data-live]; a data-until element is hidden from then. */
-html:not([data-live~="T2"])     [data-needs="T2"],     html[data-live~="T2"]     [data-until="T2"],
-html:not([data-live~="T3"])     [data-needs="T3"],     html[data-live~="T3"]     [data-until="T3"],
-html:not([data-live~="T4"])     [data-needs="T4"],     html[data-live~="T4"]     [data-until="T4"],
-html:not([data-live~="WA"])     [data-needs="WA"],     html[data-live~="WA"]     [data-until="WA"],
-html:not([data-live~="S1"])     [data-needs="S1"],     html[data-live~="S1"]     [data-until="S1"],
-html:not([data-live~="PAY"])    [data-needs="PAY"],    html[data-live~="PAY"]    [data-until="PAY"],
-html:not([data-live~="REVIEW"]) [data-needs="REVIEW"], html[data-live~="REVIEW"] [data-until="REVIEW"],
-html:not([data-live~="V2"])     [data-needs="V2"],     html[data-live~="V2"]     [data-until="V2"]
-{ display:none !important; }
-
-/* The early-access warning stays up until both T2 and T4 are on. */
-html[data-live~="T2"][data-live~="T4"] .until-core { display:none !important; }
-
-/* --- Hero ------------------------------------------------------------------ */
-.lede-hi {
-  margin:16px auto 0; font-size:clamp(16px, 1.4vw, 18px); line-height:1.6;
-  color:var(--ink-2); letter-spacing:0;
-}
-.hero-note a { color:var(--muted); text-decoration:underline; text-underline-offset:3px; }
-.hero-note a:hover { color:var(--ink); }
-
-/* A reference in the illustrations. Neutral, not green: the illustration
-   shows the answer format and does not claim anything was verified. */
-.ref {
-  font-family:var(--mono); font-size:13px; letter-spacing:-.01em;
-  padding:2px 7px; border-radius:6px; white-space:nowrap;
-  background:var(--panel-2); color:var(--ink);
-}
-.specimen p.foot {
-  margin-bottom:0; padding-top:18px; border-top:1px solid var(--line-2);
-  font-size:13.5px; color:var(--muted);
-}
-.specimen p.warn {
-  font-size:14.5px; padding:12px 14px; border-radius:var(--r);
-  background:var(--panel); color:var(--ink-2);
-}
-
-/* --- Feature cards: a line that is switched on with a ticket --------------- */
-.card-note {
-  display:flex; gap:8px; align-items:flex-start; margin-top:14px;
-  font-size:14px !important; line-height:1.5 !important; color:var(--green) !important;
-}
-.card-note svg { flex:0 0 auto; margin-top:3px; }
-.channel .tag { margin-top:0; margin-left:8px; vertical-align:middle; }
-
-/* --- Audience sections ----------------------------------------------------- */
-.uses { display:grid; gap:20px; grid-template-columns:repeat(2, 1fr); }
-.use {
-  background:var(--bg); border:1px solid var(--line);
-  border-radius:var(--r-xl); padding:28px 28px 26px;
-}
-.use .h3 { margin-bottom:8px; }
-.use p { font-size:15.5px; line-height:1.62; color:var(--muted); }
-.use q { quotes:"\201C" "\201D"; color:var(--ink-2); }
-
-.split {
-  display:grid; grid-template-columns:1fr 1fr; gap:clamp(36px, 6vw, 76px);
-  align-items:start;
-}
-.split .specimen { margin:0; max-width:none; }
-
-.points { list-style:none; margin:0; padding:0; display:grid; gap:24px; }
-.points li { display:grid; grid-template-columns:20px 1fr; gap:14px; }
-.points .pip {
-  width:7px; height:7px; margin:10px 0 0 6px; border-radius:var(--pill); background:var(--ink);
-}
-.points b { display:block; font-weight:550; font-size:16.5px; letter-spacing:-.018em; margin-bottom:3px; }
-.points .detail { font-size:15.5px; line-height:1.6; color:var(--muted); }
-.points .detail.green { color:var(--green); }
-
-.cta-row { display:flex; flex-wrap:wrap; gap:11px; align-items:center; margin-top:40px; }
-.cta-row .small { margin-left:4px; }
-
-.subhead {
-  margin:clamp(64px, 8vw, 96px) 0 24px; display:flex; flex-wrap:wrap;
-  align-items:baseline; gap:6px 14px;
-}
-.subhead .h3 { font-size:22px; }
-
-/* --- How we check ---------------------------------------------------------- */
-.early {
-  margin-top:24px; padding:15px 18px; border-radius:var(--r);
-  background:var(--bg); border:1px solid var(--line);
-  font-size:15px; line-height:1.6; color:var(--ink-2);
-}
-.early b { font-weight:600; color:var(--ink); }
-
-.status { list-style:none; margin:30px 0 0; padding:0; display:grid; gap:22px; }
-.status li { display:grid; grid-template-columns:76px 1fr; gap:14px; align-items:start; }
-.status b { display:block; font-weight:550; font-size:16px; letter-spacing:-.018em; margin-bottom:3px; }
-.status .detail { font-size:15px; line-height:1.58; color:var(--muted); }
-
-.chip {
-  display:inline-block; justify-self:start; margin-top:2px;
-  font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
-  padding:3px 9px; border-radius:var(--pill); white-space:nowrap;
-  border:1px solid var(--line); color:var(--faint); background:var(--bg);
-}
-.chip.on { border-color:transparent; background:var(--green-soft); color:var(--green); }
-
-.footnote { margin-top:26px; font-size:13px; line-height:1.6; color:var(--faint); }
-.footnote i { font-style:italic; }
-
-.stack { display:grid; gap:20px; }
-.checklist {
-  background:var(--bg); border:1px solid var(--line);
-  border-radius:var(--r-xl); padding:28px 30px; box-shadow:var(--lift);
-}
-.checklist h3 { font-size:17px; letter-spacing:-.02em; margin-bottom:16px; }
-.checklist ol { margin:0; padding:0 0 0 20px; display:grid; gap:12px; }
-.checklist li { font-size:15px; line-height:1.58; color:var(--ink-2); padding-left:4px; }
-.checklist li::marker { color:var(--faint); font-weight:600; }
-
-/* --- Team ----------------------------------------------------------------- */
-.use .role {
-  font-size:11.5px !important; font-weight:600; letter-spacing:.07em; text-transform:uppercase;
-  color:var(--faint) !important; margin-bottom:10px;
-}
-
-/* --- Credits --------------------------------------------------------------- */
-.figure .extra { margin-top:10px; color:var(--ink-2); }
-.figures-note { margin-top:24px; text-align:center; font-size:15px; color:var(--muted); }
-
-/* --- Responsive ------------------------------------------------------------ */
-@media (min-width:1001px) {
-  /* The shorter column travels with the reader instead of leaving a gap. */
-  .split > .specimen, .split > .stack { position:sticky; top:96px; }
-}
-@media (max-width:1000px) {
-  .split { grid-template-columns:1fr; }
-}
-@media (max-width:720px) {
-  .uses { grid-template-columns:1fr; }
-  .use { padding:24px 22px; }
-  .cta-row .btn { width:100%; }
-  .cta-row .small { margin:4px 0 0; width:100%; text-align:center; }
-  .status li { grid-template-columns:1fr; gap:8px; }
-  .checklist { padding:24px 22px; }
-  .specimen .ref { white-space:normal; }
 }
 `;
