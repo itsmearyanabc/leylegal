@@ -253,6 +253,32 @@ describe('section lookup', () => {
     expect(stages.length).toBeGreaterThan(0);
     expect(events[0].type).toBe('thread');
   });
+
+  it('refunds a provision with no official text, as a search that found nothing is', async () => {
+    // The reply says the text is not available rather than describing it from
+    // memory. Nothing was answered, so nothing is kept.
+    const { service, credits, rag, chats } = build({ intent: 'SECTION_LOOKUP' });
+    rag.answer.mockResolvedValueOnce({
+      text: "I don't have the official text of *Section 138 of the Negotiable Instruments Act, 1881* in Ley Legal yet.",
+      citations: [], passages: [], statutes: [], model: 'rule:no-official-text', inputTokens: 0, outputTokens: 0,
+      latencyMs: 1, guardrailTriggered: false, guardrailReason: null, mocked: false, unavailable: true,
+    });
+
+    const events = await ask(service, 'section 138 NI Act');
+
+    expect(credits.refund).toHaveBeenCalledWith('user-1', 'GUEST_LAWYER', expect.stringMatching(/^spend:web:/), 'No official text for that provision');
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.charged).toBe(0);
+    const stored = chats.appendMessage.mock.calls.map((c) => c[0]).find((m) => m.role === 'assistant');
+    expect(stored?.creditsCharged).toBe(0);
+  });
+
+  it('keeps the charge for a real answer', async () => {
+    const { service, credits } = build({ intent: 'SECTION_LOOKUP' });
+
+    await ask(service, 'what is IPC 302');
+    expect(credits.refund).not.toHaveBeenCalled();
+  });
 });
 
 describe('case law', () => {

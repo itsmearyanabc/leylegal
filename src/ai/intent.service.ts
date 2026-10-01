@@ -23,6 +23,14 @@ export interface ClassifiedIntent {
   cnrNumber: string | null;
   sectionNumber: string | null;
   actCode: ActCode | null;
+  /**
+   * The Act named when it is none of the codes act_code covers, by its full
+   * title - "NI Act" -> "Negotiable Instruments Act, 1881". Without it a
+   * question about "section 138 NI Act" carried only a number, and the search
+   * found BNS 138, BNSS 138 and BSA 138: three sections of the wrong laws.
+   * It is also what the official text is looked up by (StatuteFetcher).
+   */
+  actName?: string | null;
   /** Query rewritten in English legal terminology, for retrieval. */
   searchQuery: string;
   /**
@@ -281,6 +289,7 @@ export class IntentService {
       cnrNumber: parsed.cnr_number ? String(parsed.cnr_number).toUpperCase() : null,
       sectionNumber: parsed.section_number ? String(parsed.section_number).toUpperCase() : null,
       actCode: normaliseActCode(parsed.act_code ? String(parsed.act_code) : null),
+      actName: typeof parsed.act_name === 'string' && parsed.act_name.trim() ? parsed.act_name.trim().slice(0, 160) : null,
       searchQuery: parsed.search_query ? String(parsed.search_query) : original,
       rawText: original,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.6,

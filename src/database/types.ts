@@ -116,6 +116,12 @@ export interface StatuteRow {
    * pair cannot hold. Attached by CorpusRepository.searchStatutes.
    */
   correspondence?: string[];
+  /**
+   * Where the text came from: the Gazette PDF for the new codes, the Kanoon
+   * document for a fetched provision. Null on 0006's abridged seed rows,
+   * which are summaries, not enacted text. Attached by searchStatutes.
+   */
+  source_url?: string | null;
 }
 
 /** A retrieved passage, as returned by hybrid_search_judgments(). */

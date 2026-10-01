@@ -13,11 +13,11 @@ import {
   buildPrecedentSearchPrompt,
   buildSectionExplanationPrompt,
   buildSmallTalkPrompt,
-  buildUnverifiedProvisionPrompt,
 } from './prompts';
 import { nonexistentProvision } from './provision-range';
 import { LlmMessage } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
+import { kanoonSearchLink, ProvisionTarget, provisionTarget, StatuteFetcher } from './statute-fetcher';
 
 /**
  * Stages the pipeline actually passes through, in order.
@@ -46,6 +46,12 @@ export interface RagAnswer {
   guardrailReason: string | null;
   /** True when no provider is configured and the answer is a placeholder. */
   mocked: boolean;
+  /**
+   * The provision asked about has no official text here - not in the corpus,
+   * not on Indian Kanoon - and the reply says so instead of answering from
+   * memory. Nothing was delivered, so the channel refunds the charge.
+   */
+  unavailable?: boolean;
 }
 
 /**
@@ -76,6 +82,7 @@ export class RagService {
     private readonly registry: ProviderRegistry,
     private readonly guardrails: GuardrailsService,
     @InjectEnv() private readonly env: AppEnv,
+    private readonly statutes: StatuteFetcher,
   ) {}
 
   /** Statute explanation. No case law retrieval; the acts table is authority enough. */
@@ -89,29 +96,25 @@ export class RagService {
     // A number past the end of its Act has a certain answer, and it is not
     // one to hand to a model told to stop when it is unsure.
     const impossible = nonexistentProvision(intent.actCode, intent.sectionNumber);
-    if (impossible) {
-      return {
-        text: impossible,
-        citations: [],
-        passages: [],
-        statutes: [],
-        model: 'rule:provision-range',
-        inputTokens: 0,
-        outputTokens: 0,
-        latencyMs: Date.now() - started,
-        guardrailTriggered: false,
-        guardrailReason: null,
-        mocked: false,
-      };
+    if (impossible) return fixedAnswer(impossible, 'rule:provision-range', started);
+
+    const target = provisionTarget(intent);
+    onStage?.('retrieving');
+
+    /*
+     * An Act outside the loaded codes, named by the advocate: its number is
+     * never looked up in the codes. "Section 138 NI Act" found BNS 138, BNSS
+     * 138 and BSA 138 by number alone - three sections of the wrong laws.
+     */
+    if (!intent.actCode && intent.actName && intent.sectionNumber) {
+      const official = target ? ((await this.statutes.stored(target)) ?? (await this.statutes.fetch(target)).row) : null;
+      if (!official) return unavailableAnswer(intent, target, started);
+      return this.explain([official], intent, started, history, onStage);
     }
 
-    onStage?.('retrieving');
-    const found = await this.corpus.searchStatutes(
-      intent.searchQuery,
-      intent.sectionNumber,
-      intent.actCode,
-      3,
-    );
+    // The Constitution's rows are keyed "21", not "Article 21".
+    const searchNumber = intent.actCode === 'COI' && target ? target.number : intent.sectionNumber;
+    const found = await this.corpus.searchStatutes(intent.searchQuery, searchNumber, intent.actCode, 3);
 
     // When the named provision itself was found, the model gets that provision,
     // its sub-sections and its official counterparts - not its neighbours by
@@ -119,40 +122,48 @@ export class RagService {
     // number similarity (examination of a person accused of rape), which can
     // only distract an answer about trials before High Courts.
     const named = intent.sectionNumber ? found.filter((s) => s.match_type === 'EXACT' || s.match_type === 'RECODIFIED') : [];
-    const statutes = named.length > 0 ? named : found;
+    let statutes = named.length > 0 ? named : found;
+
+    /*
+     * The provision asked about, in its own enacted words. "IPC 415" was
+     * answered from BNS 318 alone, through the correspondence; "IPC 302" from
+     * 0006's abridged summary. The official text is fetched once and kept.
+     */
+    if (target && intent.actCode) {
+      const whole = statutes.find((s) => s.act_code.toUpperCase() === intent.actCode && s.section_number.toUpperCase() === target.number);
+      if (!whole) {
+        const fetched = (await this.statutes.fetch(target)).row;
+        if (fetched) statutes = [fetched, ...statutes.filter((s) => s.id !== fetched.id)];
+      } else if (whole.source_url === null) {
+        const replaced = await this.statutes.replaceAbridged(whole, target);
+        if (replaced) statutes = statutes.map((s) => (s.id === whole.id ? replaced : s));
+      }
+    }
 
     if (statutes.length === 0) {
       /*
-       * Nothing in the corpus for a provision the advocate named by number.
-       *
-       * This fell through to the general prompt, which forbids stating any
-       * section it was not given - so a question about Order 32 CPC produced an
-       * answer that declined to say what Order 32 is. The seeded corpus is ~28
-       * sections of the criminal codes; the CPC's Orders, the NI Act, the
-       * Companies Act and most of what a civil practice runs on are simply not
-       * in it, and refusing them all is refusing the product.
-       *
-       * A provision the advocate named is not a citation the model chose. It is
-       * answered, from general knowledge, and labelled as unverified - see
-       * buildUnverifiedProvisionPrompt for what stays forbidden.
+       * Nothing official for a provision the advocate named. This used to be
+       * answered from the model's memory under a "not verified" line, and that
+       * is how "Section 520 BNSS" became disposal of property pending appeal.
+       * A named provision is now answered from its text or not at all.
        */
-      const named = describeProvision(intent);
-      if (named) {
-        const system = buildUnverifiedProvisionPrompt(named, intent.language);
-        return this.generate(system, intent, [], [], started, history, onStage);
-      }
+      if (describeProvision(intent)) return unavailableAnswer(intent, target, started);
 
       // No provision named either - a general legal question, answered as one.
       return this.answerGeneral(intent, started, history, onStage);
     }
 
-    // describeProvision is the same phrasing the unverified-provision path uses
-    // above, so the two answers name a provision the same way.
-    const system = buildSectionExplanationPrompt(
-      statutes,
-      intent.language,
-      describeProvision(intent),
-    );
+    return this.explain(statutes, intent, started, history, onStage);
+  }
+
+  private explain(
+    statutes: StatuteRow[],
+    intent: ClassifiedIntent,
+    started: number,
+    history: LlmMessage[],
+    onStage?: RagProgress,
+  ): Promise<RagAnswer> {
+    const system = buildSectionExplanationPrompt(statutes, intent.language, describeProvision(intent));
     return this.generate(system, intent, [], statutes, started, history, onStage);
   }
 
@@ -329,9 +340,44 @@ function describeProvision(intent: ClassifiedIntent): string | null {
 
   // "Order 32" already reads as a provision; a bare "302" needs the word.
   const head = /^(order|rule|article)\b/i.test(provision) ? provision : `Section ${provision}`;
-  
-  if (!act) return head;
+
+  if (!act) return intent.actName ? `${head} of the ${intent.actName}` : head;
   const actName = ACT_FULL_NAMES[act] ?? act;
   return `${head} of the ${actName}`;
+}
+
+function fixedAnswer(text: string, model: string, started: number, unavailable = false): RagAnswer {
+  return {
+    text,
+    citations: [],
+    passages: [],
+    statutes: [],
+    model,
+    inputTokens: 0,
+    outputTokens: 0,
+    latencyMs: Date.now() - started,
+    guardrailTriggered: false,
+    guardrailReason: null,
+    mocked: false,
+    ...(unavailable ? { unavailable: true } : {}),
+  };
+}
+
+/**
+ * The reply when a named provision has no official text here. Says so, points
+ * to where it can be read, and does not describe it: a wrong number or wording
+ * costs an advocate more than no answer. The charge is refunded upstream.
+ */
+function unavailableAnswer(intent: ClassifiedIntent, target: ProvisionTarget | null, started: number): RagAnswer {
+  const provision = describeProvision(intent) ?? 'that provision';
+  const link = target
+    ? kanoonSearchLink(target)
+    : kanoonSearchLink({ query: `${intent.sectionNumber ?? ''} ${intent.actName ?? (intent.actCode ? ACT_FULL_NAMES[intent.actCode] ?? intent.actCode : '')}`.trim() });
+  const text = [
+    `I don't have the official text of *${provision}* in Ley Legal yet, so I won't describe it from memory - a wrong section number or wording would cost you more than no answer.`,
+    `You can read it on Indian Kanoon: ${link}`,
+    'No credits were charged for this question.',
+  ].join('\n\n');
+  return fixedAnswer(text, 'rule:no-official-text', started, true);
 }
 

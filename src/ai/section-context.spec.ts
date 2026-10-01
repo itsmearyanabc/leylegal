@@ -17,12 +17,17 @@ function row(section_number: string, section_title: string, match_type: StatuteR
   };
 }
 
-function service(found: StatuteRow[]) {
+function service(found: StatuteRow[], fetcherOver: Partial<Record<'stored' | 'fetch' | 'replaceAbridged', jest.Mock>> = {}) {
   const registry = { complete: jest.fn().mockResolvedValue({ text: 'answer', model: 'm', inputTokens: 1, outputTokens: 1 }) };
   const guardrails = { verify: jest.fn(async (text: string) => ({ text, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null })) };
   const corpus = { searchStatutes: jest.fn().mockResolvedValue(found) };
-  const rag = new RagService(corpus as never, {} as never, registry as never, guardrails as never, {} as never);
-  return { rag, registry };
+  const statutes = {
+    stored: fetcherOver.stored ?? jest.fn().mockResolvedValue(null),
+    fetch: fetcherOver.fetch ?? jest.fn().mockResolvedValue({ row: null, outcome: 'not-found' }),
+    replaceAbridged: fetcherOver.replaceAbridged ?? jest.fn().mockResolvedValue(null),
+  };
+  const rag = new RagService(corpus as never, {} as never, registry as never, guardrails as never, {} as never, statutes as never);
+  return { rag, registry, corpus, statutes };
 }
 
 const intent = (sectionNumber: string | null): ClassifiedIntent => ({
@@ -62,5 +67,112 @@ describe('the statutes a section answer is written from', () => {
     const system: string = registry.complete.mock.calls[0][0].system;
     expect(system).toContain('BNSS Section 144');
     expect(system).toContain('BNSS Section 146');
+  });
+});
+
+/**
+ * A named provision is answered from its official text - from the corpus, or
+ * fetched once from Indian Kanoon - or the reply says it is not available.
+ * Never from the model's memory.
+ */
+describe('a provision the corpus does not hold', () => {
+  const NI_138: StatuteRow = {
+    ...row('138', 'Dishonour of cheque for insufficiency, etc., of funds in the account', 'EXACT', 'NIA1881-1a2b'),
+    act_name: 'The Negotiable Instruments Act, 1881',
+    source_url: 'https://indiankanoon.org/doc/1823824/',
+  };
+  const ni = (over: Partial<ClassifiedIntent> = {}): ClassifiedIntent => ({
+    ...intent('138'), actCode: null, actName: 'Negotiable Instruments Act, 1881', rawText: 'section 138 NI Act', ...over,
+  });
+
+  it('never looks another Act up in the codes by its number', async () => {
+    const { rag, registry, corpus, statutes } = service(
+      [row('138', 'Kidnapping or maiming a child for begging', 'EXACT', 'BNS')],
+      { fetch: jest.fn().mockResolvedValue({ row: NI_138, outcome: 'stored' }) },
+    );
+
+    await rag.answer(ni());
+    const system: string = registry.complete.mock.calls[0][0].system;
+
+    expect(corpus.searchStatutes).not.toHaveBeenCalled();
+    expect(statutes.fetch).toHaveBeenCalledWith(expect.objectContaining({ actName: 'Negotiable Instruments Act, 1881', number: '138' }));
+    expect(system).toContain('Section 138 of The Negotiable Instruments Act, 1881 - Dishonour of cheque');
+    expect(system).not.toContain('Kidnapping');
+  });
+
+  it('uses a provision fetched earlier without asking Kanoon again', async () => {
+    const { rag, statutes } = service([], { stored: jest.fn().mockResolvedValue(NI_138) });
+
+    await rag.answer(ni());
+    expect(statutes.fetch).not.toHaveBeenCalled();
+  });
+
+  it('says it is not available - with a link, and no model call - when Kanoon does not have it', async () => {
+    const { rag, registry } = service([]);
+
+    const answer = await rag.answer(ni());
+
+    expect(registry.complete).not.toHaveBeenCalled();
+    expect(answer.unavailable).toBe(true);
+    expect(answer.text).toContain(`I don't have the official text of *Section 138 of the Negotiable Instruments Act, 1881*`);
+    expect(answer.text).toContain(`won't describe it from memory`);
+    expect(answer.text).toContain('https://indiankanoon.org/search/?formInput=section%20138%20negotiable%20instruments%20act');
+    expect(answer.text).toContain('No credits were charged');
+  });
+
+  it('answers an old-code section from its own text as well as its new counterpart', async () => {
+    const IPC_415 = { ...row('415', 'Cheating', 'EXACT', 'IPC'), source_url: 'https://indiankanoon.org/doc/1306824/' };
+    const { rag, registry, statutes } = service(
+      [{ ...row('318', 'Cheating', 'RECODIFIED', 'BNS'), source_url: 'gazette' }],
+      { fetch: jest.fn().mockResolvedValue({ row: IPC_415, outcome: 'stored' }) },
+    );
+
+    await rag.answer({ ...intent('415'), actCode: 'IPC' });
+    const system: string = registry.complete.mock.calls[0][0].system;
+
+    expect(statutes.fetch).toHaveBeenCalledWith(expect.objectContaining({ actCode: 'IPC', number: '415' }));
+    expect(system.indexOf('IPC Section 415')).toBeGreaterThan(-1);
+    expect(system.indexOf('IPC Section 415')).toBeLessThan(system.indexOf('BNS Section 318'));
+  });
+
+  it('replaces an abridged seed with the official text, and labels one it could not replace', async () => {
+    const abridged = { ...row('302', 'Punishment for murder', 'EXACT', 'IPC'), source_url: null };
+
+    const replaced = service([abridged], {
+      replaceAbridged: jest.fn().mockResolvedValue({ ...abridged, section_text: '302. Whoever commits murder shall be punished with death', source_url: 'kanoon' }),
+    });
+    await replaced.rag.answer({ ...intent('302'), actCode: 'IPC' });
+    const official: string = replaced.registry.complete.mock.calls[0][0].system;
+    expect(official).toContain('302. Whoever commits murder shall be punished with death');
+    expect(official).not.toContain('Abridged summary');
+
+    const kept = service([abridged]);
+    await kept.rag.answer({ ...intent('302'), actCode: 'IPC' });
+    expect(kept.registry.complete.mock.calls[0][0].system).toContain('(Abridged summary, not the enacted wording');
+  });
+
+  it('looks a Constitution Article up by its number', async () => {
+    const { rag, corpus } = service([{ ...row('21', 'Protection of life and personal liberty', 'EXACT', 'COI'), source_url: 'kanoon' }]);
+
+    await rag.answer({ ...intent('Article 21'), actCode: 'COI' });
+    expect(corpus.searchStatutes).toHaveBeenCalledWith(expect.any(String), '21', 'COI', 3);
+  });
+
+  it('does not fetch a section of a code loaded in full', async () => {
+    const { rag, statutes } = service([{ ...row('103', 'Punishment for murder', 'EXACT', 'BNS'), source_url: 'gazette' }]);
+
+    await rag.answer({ ...intent('103'), actCode: 'BNS' });
+    expect(statutes.fetch).not.toHaveBeenCalled();
+  });
+
+  it('says a CPC Order is not available rather than describing it from memory', async () => {
+    const { rag, registry, statutes } = service([]);
+
+    const answer = await rag.answer({ ...intent('Order 39 Rule 1'), actCode: 'CPC' });
+
+    expect(statutes.fetch).not.toHaveBeenCalled();
+    expect(registry.complete).not.toHaveBeenCalled();
+    expect(answer.unavailable).toBe(true);
+    expect(answer.text).toContain('Order 39 Rule 1 of the Civil Procedure Code (CPC)');
   });
 });

@@ -146,6 +146,45 @@ export class KanoonService {
   }
 
   /**
+   * One page of legislation results (`doctypes:laws`), for finding the
+   * official text of a provision the corpus does not hold.
+   *
+   * Its own timeout, shorter than case law's: an advocate asking what a section
+   * says should get "not available, here is the link" in seconds, not wait out
+   * the 15s a research search is allowed. Kanoon's search p95 measured 2.7s.
+   * Cached like every search - one paid query per distinct provision a day.
+   */
+  async searchLaws(query: string, timeoutMs: number): Promise<KanoonSearchDoc[]> {
+    if (!this.isConfigured) throw new KanoonNotConfiguredError();
+
+    const normalised = query.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!normalised) return [];
+
+    const key = `kanoon:laws:${createHash('sha256').update(normalised).digest('hex').slice(0, 32)}`;
+    const stored = await this.cache.get<KanoonSearchDoc[]>(key).catch(() => null);
+    if (stored) return stored;
+
+    const url = `${this.baseUrl}/search/?formInput=${encodeURIComponent(`${normalised} doctypes:laws`)}&pagenum=0`;
+    const page = await this.breaker.execute(
+      () => this.post<KanoonSearchResponse>(url, timeoutMs),
+      (err) => !(err instanceof KanoonNotConfiguredError),
+    );
+    if (page.error || page.errmsg) {
+      throw new Error(`Indian Kanoon error: ${page.errmsg ?? page.error}`);
+    }
+
+    const docs = page.docs ?? [];
+    await this.cache.set(key, docs, this.cacheTtl).catch(() => undefined);
+    return docs;
+  }
+
+  /** A document's HTML - for a provision, the akn-section markup statute.parser reads. */
+  async lawDocument(tid: number, timeoutMs: number): Promise<string> {
+    if (!this.isConfigured) throw new KanoonNotConfiguredError();
+    return this.breaker.execute(() => this.fetchDocument(tid, timeoutMs));
+  }
+
+  /**
    * Fetch enough pages to satisfy `maxResults`.
    *
    * Pages are requested in parallel: Kanoon has no page-size parameter, so 15
@@ -207,7 +246,17 @@ export class KanoonService {
     // and Bombay - the advocate's one explicit constraint was the only part of
     // the question ignored.
     const url = `${this.baseUrl}/search/?formInput=${encodeURIComponent(applyCourtFilter(query))}&pagenum=${pageNum}`;
+    const payload = await this.post<KanoonSearchResponse>(url, this.env.KANOON_TIMEOUT_MS);
 
+    // The API answers 200 with an error body on some malformed queries.
+    if (payload.error || payload.errmsg) {
+      throw new Error(`Indian Kanoon error: ${payload.errmsg ?? payload.error}`);
+    }
+
+    return payload;
+  }
+
+  private async post<T>(url: string, timeoutMs: number): Promise<T> {
     // Kanoon's API is POST-only and uses `Token <key>`, not `Bearer`.
     const response = await fetch(url, {
       method: 'POST',
@@ -215,7 +264,7 @@ export class KanoonService {
         authorization: `Token ${this.apiKey}`,
         accept: 'application/json',
       },
-      signal: AbortSignal.timeout(this.env.KANOON_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (response.status === 401 || response.status === 403) {
@@ -229,14 +278,7 @@ export class KanoonService {
       throw new Error(`Indian Kanoon returned ${response.status}: ${body.slice(0, 200)}`);
     }
 
-    const payload = (await response.json()) as KanoonSearchResponse;
-
-    // The API answers 200 with an error body on some malformed queries.
-    if (payload.error || payload.errmsg) {
-      throw new Error(`Indian Kanoon error: ${payload.errmsg ?? payload.error}`);
-    }
-
-    return payload;
+    return (await response.json()) as T;
   }
 
   /**
@@ -329,18 +371,8 @@ export class KanoonService {
     }
   }
 
-  private async fetchDocument(tid: number): Promise<string> {
-    const response = await fetch(`${this.baseUrl}/doc/${tid}/`, {
-      method: 'POST',
-      headers: { authorization: `Token ${this.apiKey}`, accept: 'application/json' },
-      signal: AbortSignal.timeout(this.env.KANOON_TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Indian Kanoon returned ${response.status} for document ${tid}`);
-    }
-
-    const payload = (await response.json()) as { doc?: string };
+  private async fetchDocument(tid: number, timeoutMs = this.env.KANOON_TIMEOUT_MS): Promise<string> {
+    const payload = await this.post<{ doc?: string }>(`${this.baseUrl}/doc/${tid}/`, timeoutMs);
     return payload.doc ?? '';
   }
 

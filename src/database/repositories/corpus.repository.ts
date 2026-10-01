@@ -215,20 +215,85 @@ export class CorpusRepository {
     if (rows.length === 0) return rows;
 
     // The official old/new correspondence for every section found, on whichever
-    // side of the recodification the row sits.
+    // side of the recodification the row sits - and where each row's text came
+    // from, which is what tells an enacted text from 0006's abridged seed.
     const acts = rows.map((r) => r.act_code.toUpperCase());
     const bases = rows.map((r) => r.section_number.split('(')[0].toUpperCase());
-    const pairs = await this.db.sql<CorrespondencePair[]>`
-      SELECT DISTINCT c.new_act, c.new_section, c.old_act, c.old_section
-        FROM statute_correspondence c
-        JOIN unnest(${acts}::text[], ${bases}::text[]) AS q(act, base)
-          ON (upper(c.new_act) = q.act AND split_part(upper(c.new_section), '(', 1) = q.base)
-          OR (upper(c.old_act) = q.act AND split_part(upper(c.old_section), '(', 1) = q.base)
-    `;
+    const ids = rows.map((r) => r.id);
+    const [pairs, sources] = await Promise.all([
+      this.db.sql<CorrespondencePair[]>`
+        SELECT DISTINCT c.new_act, c.new_section, c.old_act, c.old_section
+          FROM statute_correspondence c
+          JOIN unnest(${acts}::text[], ${bases}::text[]) AS q(act, base)
+            ON (upper(c.new_act) = q.act AND split_part(upper(c.new_section), '(', 1) = q.base)
+            OR (upper(c.old_act) = q.act AND split_part(upper(c.old_section), '(', 1) = q.base)
+      `,
+      this.db.sql<{ id: string; source_url: string | null }[]>`
+        SELECT id, source_url FROM statutes WHERE id = ANY(${ids}::uuid[])
+      `,
+    ]);
+    const sourceOf = new Map(sources.map((s) => [s.id, s.source_url]));
     for (const row of rows) {
       row.correspondence = describeCorrespondence(row, pairs);
+      row.source_url = sourceOf.get(row.id) ?? null;
     }
     return rows;
+  }
+
+  /** Sections of Acts outside the loaded codes with this number - the fetched ones. */
+  async lawsWithSection(section: string, excludeActs: readonly string[]): Promise<StatuteRow[]> {
+    return this.db.sql<StatuteRow[]>`
+      SELECT s.id, s.act_code, s.act_name, s.section_number, s.section_title, s.section_text,
+             s.punishment, s.is_cognizable, s.is_bailable, s.is_compoundable, s.triable_by,
+             s.corresponding_act, s.corresponding_section, s.source_url,
+             'EXACT'::TEXT AS match_type, 1000.0::DOUBLE PRECISION AS score
+        FROM statutes s
+       WHERE upper(s.section_number) = upper(${section})
+         AND upper(s.act_code) <> ALL(${excludeActs.map((a) => a.toUpperCase())}::text[])
+         AND s.language = 'en'
+    `;
+  }
+
+  /**
+   * Keep a provision's official text, fetched once. Never overwrites a row
+   * already there - the Gazette text of the new codes least of all.
+   */
+  async storeLaw(law: {
+    actCode: string;
+    actName: string;
+    sectionNumber: string;
+    sectionTitle: string;
+    sectionText: string;
+    sourceUrl: string;
+  }): Promise<StatuteRow | null> {
+    await this.db.sql`
+      INSERT INTO statutes (act_code, act_name, section_number, section_title, section_text, source_url, language)
+      VALUES (${law.actCode}, ${law.actName}, ${law.sectionNumber}, ${law.sectionTitle}, ${law.sectionText}, ${law.sourceUrl}, 'en')
+      ON CONFLICT (act_code, section_number, language) DO NOTHING
+    `;
+    const [row] = await this.db.sql<StatuteRow[]>`
+      SELECT s.id, s.act_code, s.act_name, s.section_number, s.section_title, s.section_text,
+             s.punishment, s.is_cognizable, s.is_bailable, s.is_compoundable, s.triable_by,
+             s.corresponding_act, s.corresponding_section, s.source_url,
+             'EXACT'::TEXT AS match_type, 1000.0::DOUBLE PRECISION AS score
+        FROM statutes s
+       WHERE s.act_code = ${law.actCode} AND s.section_number = ${law.sectionNumber} AND s.language = 'en'
+    `;
+    return row ?? null;
+  }
+
+  /**
+   * Replace an abridged seed's text (0006: "ABRIDGED summaries, not the enacted
+   * text") with the official text. Only a row with no source is touched, so an
+   * enacted text can never be overwritten; classification and mapping stay.
+   */
+  async replaceAbridged(id: string, title: string, text: string, sourceUrl: string): Promise<boolean> {
+    const updated = await this.db.sql`
+      UPDATE statutes
+         SET section_title = ${title}, section_text = ${text}, source_url = ${sourceUrl}, updated_at = NOW()
+       WHERE id = ${id} AND source_url IS NULL
+    `;
+    return updated.count > 0;
   }
 
   /**

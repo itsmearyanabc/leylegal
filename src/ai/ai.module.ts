@@ -7,6 +7,7 @@ import { ChatMemoryService } from './memory/chat-memory.service';
 import { PrecedentsService } from './precedents.service';
 import { ProviderRegistry } from './providers/provider.registry';
 import { RagService } from './rag.service';
+import { StatuteFetcher } from './statute-fetcher';
 import { TranscriptionService } from './transcription.service';
 
 const providers = [
@@ -15,6 +16,7 @@ const providers = [
   IntentService,
   GuardrailsService,
   RagService,
+  StatuteFetcher,
   PrecedentsService,
   TranscriptionService,
   ChatMemoryService,

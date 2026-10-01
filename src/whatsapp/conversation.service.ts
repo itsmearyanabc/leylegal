@@ -1375,6 +1375,12 @@ export class ConversationService {
 
     const answer = await this.rag.answer(intent, history);
 
+    // No official text for the provision asked about: the reply says so rather
+    // than answering, and the charge taken in answerSearch() goes back.
+    if (answer.unavailable) {
+      await this.credits.refund(user.id, user.role, spendReference(job.waMessageId), 'No official text for that provision');
+    }
+
     let text = answer.text.trim();
     if (!text) {
       text = 'I could not produce an answer for that. Try rephrasing, or type *menu* for other options.';

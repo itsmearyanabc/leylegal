@@ -23,6 +23,7 @@ Return ONLY a JSON object with exactly these keys:
   "cnr_number": the 16-character CNR if one is present, else null,
   "section_number": the statutory section number if one is named (e.g. "302", "498A", "156(3)"), else null,
   "act_code": one of "IPC" | "BNS" | "CRPC" | "BNSS" | "IEA" | "BSA" if an act is named or clearly implied, else null,
+  "act_name": when the user names an Act that is NOT one of the act_code values, its full official title with the year, e.g. "NI Act" -> "Negotiable Instruments Act, 1881", "POCSO" -> "Protection of Children from Sexual Offences Act, 2012", "Constitution" -> "Constitution of India"; null when act_code is set, when no other Act is named, or when you are not certain of the full title,
   "search_query": the user's information need, rewritten in clear English legal terminology suitable for search (incorporate context from previous turns if it is a follow-up question). DO NOT expand acronyms like BNS, BNSS, IPC, CRPC, etc.,
   "confidence": a number between 0 and 1
 }
@@ -316,52 +317,6 @@ Reply with JSON only, no code fence:
 {"summary":"..."}`;
 }
 
-/**
- * The advocate named a provision the corpus has no text for.
- *
- * ## Why this is not just the general prompt
- *
- * The general prompt forbids stating any section number it was not given. That
- * rule exists to stop invented *case citations*, which is the failure this
- * product is built to prevent - and applied to statutes it made the bot useless
- * for most of civil practice. The seeded corpus is ~28 sections of the criminal
- * codes and the Evidence Act; the CPC's Orders are not in it, so "what does
- * Order 32 CPC say" got an answer that declined to say.
- *
- * A provision the advocate themselves named is a different object from a
- * citation the model chose. It is published, fixed, and checkable in a minute
- * against the bare Act - and this reply says so rather than implying it was
- * verified. What stays forbidden is unchanged: no case citations, and no
- * inventing a *different* provision to support the answer.
- *
- * ## The failure this has to avoid
- *
- * Confidently describing the wrong Order. Order numbers are close together and
- * easy to transpose - 33 is indigent persons, 34 is mortgages, 37 is summary
- * procedure - so the instruction is to decline rather than guess, and to say
- * which provision it is actually describing so a wrong one is visible
- * immediately rather than after it has been relied on.
- */
-export function buildUnverifiedProvisionPrompt(provision: string, language: string): string {
-  return `${VAKEEL_PERSONA}
-
-The advocate asked about *${provision}*. There is no text for it in the corpus, so you are answering from general knowledge of Indian law.
-
-What to do:
-- Name the provision at the top of the reply, in full, exactly as you understand it - e.g. "Order 33 CPC - suits by indigent persons". If your understanding of what that number covers differs from what they seem to expect, say so plainly. Getting an Order number wrong is the one mistake here that costs them real time.
-- Then answer: what it provides for, the procedure it sets out, and the practical points that matter in a filing.
-- If you are not confident which provision that reference is, say exactly that in one sentence and stop. Do not guess between two candidates.
-
-Hard limits:
-- Do NOT cite any case. You have been given none, and a case named here would be invented.
-- Do NOT cite a *different* section or Order as authority for what you are saying, unless it is one the provision itself cross-refers to and you are certain of it.
-- Close with one short line: this is from general knowledge and is not verified against the judgment corpus. One line, at the end, not repeated.
-
-${WHATSAPP_FORMATTING}
-
-${languageInstruction(language)}`;
-}
-
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
@@ -406,6 +361,21 @@ function formatPassages(passages: RetrievedChunk[]): string {
     .join('\n\n');
 }
 
+const CODE_ACTS = new Set(['IPC', 'BNS', 'CRPC', 'BNSS', 'IEA', 'BSA', 'CPC']);
+
+/**
+ * How a provision is named to the model and on the WhatsApp card: "BNSS
+ * Section 520" for the codes, "Article 21 of the Constitution of India", and
+ * "Section 138 of The Negotiable Instruments Act, 1881" for a fetched Act -
+ * never its internal act_code.
+ */
+export function statuteLabel(s: Pick<StatuteRow, 'act_code' | 'act_name' | 'section_number'>): string {
+  const code = s.act_code.toUpperCase();
+  if (CODE_ACTS.has(code)) return `${s.act_code} Section ${s.section_number}`;
+  if (code === 'COI') return `Article ${s.section_number} of the Constitution of India`;
+  return `Section ${s.section_number} of ${s.act_name}`;
+}
+
 function formatStatutes(statutes: StatuteRow[]): string {
   if (statutes.length === 0) return '(none)';
 
@@ -418,7 +388,10 @@ function formatStatutes(statutes: StatuteRow[]): string {
       ].filter(Boolean);
 
       return [
-        `${s.act_code} Section ${s.section_number} - ${s.section_title}`,
+        `${statuteLabel(s)} - ${s.section_title}`,
+        // 0006's seed rows are summaries; they have no source. The model must
+        // not quote one as the section's words.
+        s.source_url === null ? '  (Abridged summary, not the enacted wording - do not quote it as the text of the section.)' : null,
         `  ${s.section_text.replace(/\s+/g, ' ').trim()}`,
         s.punishment ? `  Punishment: ${s.punishment}` : null,
         flags.length > 0 ? `  Classification: ${flags.join(', ')}` : null,

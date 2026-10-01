@@ -272,7 +272,7 @@ export class ChatService {
       return;
     }
 
-    yield* this.answerWithRag({ user, threadId, question, intent, charged: decision.charged });
+    yield* this.answerWithRag({ user, threadId, question, intent, charged: decision.charged, reference });
   }
 
   /**
@@ -566,8 +566,10 @@ export class ChatService {
     question: string;
     intent: Awaited<ReturnType<IntentService['classify']>>;
     charged: number;
+    reference: string;
   }): AsyncGenerator<ChatEvent> {
-    const { user, threadId, question, intent, charged } = input;
+    const { user, threadId, question, intent, reference } = input;
+    let { charged } = input;
 
     const history = await this.chats.recentTurns(threadId, 10);
 
@@ -601,6 +603,13 @@ export class ChatService {
     const answer = await answerPromise;
     const text = answer.text.trim();
     const mocked = answer.mocked || this.registry.isFullyMocked;
+
+    // No official text for the provision asked about: the reply says so, and
+    // an answer was not delivered - refunded, as a search that found nothing is.
+    if (answer.unavailable && charged > 0) {
+      await this.credits.refund(user.id, user.role, reference, 'No official text for that provision');
+      charged = 0;
+    }
 
     const message = await this.chats.appendMessage({
       threadId,

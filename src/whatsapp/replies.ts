@@ -1,3 +1,4 @@
+import { statuteLabel } from '../ai/prompts';
 import { CaseStatus } from '../ecourts/ecourts.service';
 import { StatuteRow } from '../database/types';
 
@@ -629,7 +630,7 @@ export function formatStatute(statute: StatuteRow): string {
   ].filter(Boolean);
 
   return [
-    `*${statute.act_code} Section ${statute.section_number}*`,
+    `*${statuteLabel(statute)}*`,
     `_${statute.section_title}_`,
     '',
     statute.section_text,
