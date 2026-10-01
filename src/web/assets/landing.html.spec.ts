@@ -20,7 +20,9 @@ import { LandingView, esc, operatorClaims, renderLanding } from './landing.html'
  *  4. **An unescaped display name** - a stored XSS if `esc` is ever dropped.
  */
 
-const DESIGN = readFileSync(join(__dirname, '__fixtures__', 'landing-v2.design.html'), 'utf8');
+// LF, as the rendered page is: a Windows checkout may hand the fixture over
+// with CRLF, and a template literal never contains one.
+const DESIGN = readFileSync(join(__dirname, '__fixtures__', 'landing-v2.design.html'), 'utf8').replace(/\r\n/g, '\n');
 
 /** The design's own numbers, signed out, nothing live: the page as handed over. */
 function view(overrides: Partial<LandingView> = {}): LandingView {
