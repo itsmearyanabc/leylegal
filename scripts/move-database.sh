@@ -14,11 +14,15 @@
 #   ./scripts/move-database.sh switch     point .env at the new project (old .env kept as a backup)
 #   ./scripts/move-database.sh rollback   put the old .env back
 #
-# The current database comes from .env (DIRECT_URL, else DATABASE_URL on the
-# session port). The new one goes in .env.newdb, which git ignores:
+# Connection strings go in .env.newdb, which git ignores:
 #
+#   OLD_DIRECT_URL=<current project, Connect -> Session pooler, port 5432>
 #   NEW_DATABASE_URL=<new project, Connect -> Transaction pooler, port 6543>
 #   NEW_DIRECT_URL=<new project, Connect -> Session pooler, port 5432>
+#
+# OLD_DIRECT_URL may be left out while .env still points at the current
+# project; it is then read from .env. Passwords must be letters and digits
+# only (`openssl rand -hex 20` makes one) - anything else breaks the URL.
 #
 # The Postgres tools run from the official postgres:17 Docker image, matching
 # the server's major version, so nothing is installed on this shared host.
@@ -61,15 +65,44 @@ host_of() { printf '%s' "$1" | sed -E 's#^[^@]*@([^:/?]+).*#\1#'; }
 port_of() { printf '%s' "$1" | sed -E 's#^[^@]*@[^:/?]+:([0-9]+).*#\1#'; }
 user_of() { printf '%s' "$1" | sed -E 's#^[a-z]+://([^:@/]+).*#\1#'; }
 
+# Supabase's Prisma snippets append ?pgbouncer=true, a Prisma-only flag that
+# libpq rejects and Postgres would receive as an unknown setting.
+clean_url() { printf '%s' "$1" | sed -E 's/([?&])pgbouncer=true(&|$)/\1/; s/[?&]$//'; }
+
+# A password with : " / ? # @ % or spaces changes where the URL splits - the
+# app would connect with half a password. Letters and digits never do.
+check_password() { # where url [hint]
+  local pw
+  pw="$(printf '%s' "$2" | sed -nE 's#^[a-z]+://[^:@/]+:(.*)@[^@]*$#\1#p')"
+  [ -n "$pw" ] || die "$1 has no password in it (expected postgresql://user:PASSWORD@host:port/postgres).${3:-}"
+  case "$pw" in
+    *[!A-Za-z0-9._~-]*) die "The password in $1 contains characters that break connection strings.
+   Reset it in Supabase (Project Settings -> Database -> Reset database password) to letters and
+   digits only. This prints a strong one:  openssl rand -hex 20${3:-}" ;;
+  esac
+}
+
 load_old() {
-  OLD_URL="$(env_value "$ENV_DIR/.env" DIRECT_URL)"
+  local from="OLD_DIRECT_URL in .env.newdb" hint=""
+  OLD_URL="$(clean_url "$(env_value "$ENV_DIR/.env.newdb" OLD_DIRECT_URL)")"
+  if [ -z "$OLD_URL" ]; then
+    from="DIRECT_URL in .env"
+    OLD_URL="$(clean_url "$(env_value "$ENV_DIR/.env" DIRECT_URL)")"
+  fi
   if [ -z "$OLD_URL" ]; then
     # The transaction pooler (6543) cannot hold pg_dump's session settings;
     # the same pooler host serves session mode on 5432.
-    OLD_URL="$(env_value "$ENV_DIR/.env" DATABASE_URL)"
+    from="DATABASE_URL in .env"
+    OLD_URL="$(clean_url "$(env_value "$ENV_DIR/.env" DATABASE_URL)")"
     OLD_URL="${OLD_URL/:6543\//:5432/}"
   fi
   [ -n "$OLD_URL" ] || die "No DATABASE_URL in $ENV_DIR/.env"
+  case "$from" in *" in .env")
+    hint="
+   If .env was already edited to point at the new project, put the old project's Session pooler
+   string in .env.newdb as OLD_DIRECT_URL - this script then reads the old database from there." ;;
+  esac
+  check_password "$from" "$OLD_URL" "$hint"
   if [ "$TEST_MODE" != 1 ] && [ "$(port_of "$OLD_URL")" != 5432 ]; then
     die "The current database URL is not on the session port 5432: $(masked "$OLD_URL")"
   fi
@@ -79,12 +112,14 @@ load_old() {
 load_new() {
   local file="$ENV_DIR/.env.newdb"
   [ -f "$file" ] || die "No $file yet. Create it with NEW_DATABASE_URL and NEW_DIRECT_URL - see the top of this script."
-  NEW_URL="$(env_value "$file" NEW_DIRECT_URL)"
-  NEW_APP_URL="$(env_value "$file" NEW_DATABASE_URL)"
-  [ -n "$NEW_URL" ] && [ -n "$NEW_APP_URL" ] || die "$file needs both NEW_DIRECT_URL and NEW_DATABASE_URL."
+  NEW_URL="$(clean_url "$(env_value "$file" NEW_DIRECT_URL)")"
+  NEW_APP_URL="$(clean_url "$(env_value "$file" NEW_DATABASE_URL)")"
+  [ -n "$NEW_URL" ] && [ -n "$NEW_APP_URL" ] || die "$file needs both NEW_DIRECT_URL and NEW_DATABASE_URL (with those exact names)."
   case "$NEW_URL $NEW_APP_URL" in
     *'['*|*']'*) die "$file still contains a [PLACEHOLDER] - put the real database password in its place." ;;
   esac
+  check_password NEW_DIRECT_URL "$NEW_URL"
+  check_password NEW_DATABASE_URL "$NEW_APP_URL"
 
   if [ "$TEST_MODE" != 1 ]; then
     case "$(host_of "$NEW_URL") $(host_of "$NEW_APP_URL")" in
@@ -95,7 +130,8 @@ load_new() {
     [ "$(port_of "$NEW_URL")" = 5432 ] || die "NEW_DIRECT_URL must be the Session pooler (port 5432)."
     [ "$(port_of "$NEW_APP_URL")" = 6543 ] || die "NEW_DATABASE_URL must be the Transaction pooler (port 6543)."
     [ "$(user_of "$NEW_URL")" = "$(user_of "$NEW_APP_URL")" ] || die "NEW_DIRECT_URL and NEW_DATABASE_URL are for different projects."
-    [ "$(user_of "$NEW_URL")" != "$(user_of "${OLD_URL:-x}")" ] || die "The new connection strings point at the CURRENT project. They must be the new project's."
+    [ "$(user_of "$NEW_URL")" != "$(user_of "${OLD_URL:-x}")" ] || die "The current and the new connection strings are the same project.
+   If .env already points at the new project, put the old one in .env.newdb as OLD_DIRECT_URL."
   fi
   [ "$(masked "$NEW_URL")" != "$(masked "${OLD_URL:-x}")" ] || die "The new database is the same as the current one."
   export DST="$NEW_URL"
@@ -365,8 +401,8 @@ cmd_switch() {
   # Checked first: once switched, .env and .env.newdb name the same database,
   # which load_new would rightly refuse as a copy onto itself.
   local current
-  current="$(env_value "$ENV_DIR/.env" DATABASE_URL)"
-  if [ -n "$current" ] && [ "$current" = "$(env_value "$ENV_DIR/.env.newdb" NEW_DATABASE_URL)" ]; then
+  current="$(clean_url "$(env_value "$ENV_DIR/.env" DATABASE_URL)")"
+  if [ -n "$current" ] && [ "$current" = "$(clean_url "$(env_value "$ENV_DIR/.env.newdb" NEW_DATABASE_URL)")" ]; then
     say "Already switched: .env points at the new project."
     return
   fi
@@ -415,5 +451,5 @@ case "${1:-}" in
   copy)     cmd_copy ;;
   switch)   cmd_switch ;;
   rollback) cmd_rollback ;;
-  *) sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 1 ;;
 esac
