@@ -637,9 +637,11 @@ export function formatStatute(statute: StatuteRow): string {
     statute.punishment ? `*Punishment:* ${statute.punishment}` : null,
     flags.length > 0 ? `*Classification:* ${flags.join(' · ')}` : null,
     statute.triable_by ? `*Triable by:* ${statute.triable_by}` : null,
-    statute.corresponding_section
-      ? `*Now:* ${statute.corresponding_act} Section ${statute.corresponding_section}`
-      : null,
+    statute.correspondence?.length
+      ? `*Correspondence:* ${statute.correspondence.join('; ')}`
+      : statute.corresponding_section
+        ? `*Now:* ${statute.corresponding_act} Section ${statute.corresponding_section}`
+        : null,
   ]
     .filter((l) => l !== null)
     .join('\n');

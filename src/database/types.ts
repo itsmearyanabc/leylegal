@@ -107,8 +107,15 @@ export interface StatuteRow {
   triable_by: string | null;
   corresponding_act: string | null;
   corresponding_section: string | null;
-  match_type: 'EXACT' | 'FULLTEXT' | 'FUZZY';
+  match_type: 'EXACT' | 'RECODIFIED' | 'FULLTEXT' | 'FUZZY';
   score: number;
+  /**
+   * The official 2023 correspondence for this section, from
+   * statute_correspondence: "IPC 420 = BNS 318(4)". Many-to-one is common
+   * (BNS 318 replaced IPC 415, 417, 418 and 420), which one corresponding_*
+   * pair cannot hold. Attached by CorpusRepository.searchStatutes.
+   */
+  correspondence?: string[];
 }
 
 /** A retrieved passage, as returned by hybrid_search_judgments(). */

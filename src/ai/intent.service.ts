@@ -9,6 +9,8 @@ import {
   extractCnr,
   extractOrderReference,
   extractSectionReference,
+  namedActs,
+  recodifiedReference,
   normaliseActCode,
 } from './legal-patterns';
 import { INTENT_CLASSIFIER_SYSTEM } from './prompts';
@@ -113,6 +115,20 @@ export class IntentService {
     if (regexAct && !classified.actCode) classified.actCode = regexAct;
 
     /*
+     * The act the advocate wrote beats the act the router read.
+     *
+     * BNS and BNSS differ by one letter and are both "the new criminal code";
+     * a router that reads "Section 520 BNSS" as BNS sends the question to a
+     * section that does not exist - or, for a number both codes have, to the
+     * wrong provision entirely. When the message names exactly one act, there
+     * is nothing to interpret. Two named acts are left to the router and to
+     * recodifiedReference() below.
+     */
+    if (regexAct && classified.actCode && classified.actCode !== regexAct && namedActs(text).size === 1) {
+      classified.actCode = regexAct;
+    }
+
+    /*
      * An Order of the CPC is a provision, not a research topic.
      *
      * "order 32 CPC" was classified PRECEDENT_SEARCH and answered with ten
@@ -146,6 +162,22 @@ export class IntentService {
      */
     if (classified.intent === 'GENERAL_LEGAL' && asksAboutNamedJudgment(text)) {
       classified.intent = 'PRECEDENT_SEARCH';
+    }
+
+    /*
+     * A question about the recodification names the provision on one side.
+     *
+     * "CrPC 125 maintenance - which section in BNSS?" came back from the router
+     * as BNSS 125 - a real, different section - and was answered from memory
+     * with the right BNSS number struck out. See recodifiedReference(). The
+     * intent is left alone unless it was the catch-all: "judgments on CrPC 125
+     * under the BNSS" is still a judgment search.
+     */
+    const recodified = recodifiedReference(text);
+    if (recodified) {
+      classified.actCode = recodified.act;
+      classified.sectionNumber = recodified.section;
+      if (classified.intent === 'GENERAL_LEGAL') classified.intent = 'SECTION_LOOKUP';
     }
 
     return classified;

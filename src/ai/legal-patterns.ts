@@ -137,6 +137,70 @@ export function extractSectionReference(text: string): { section: string | null;
   return { section: null, act };
 }
 
+/** Every act a message names, by any of its names ("CrPC", "Bharatiya Nagarik Suraksha Sanhita", "BNSS"). */
+export function namedActs(text: string): Set<ActCode> {
+  const names =
+    /\b(ipc|bns|crpc|cr\.?p\.?c|bnss|iea|bsa|cpc|indian penal code|penal code|bharatiya nyaya sanhita|nyaya sanhita|code of criminal procedure|criminal procedure code|bharatiya nagarik suraksha sanhita|evidence act|indian evidence act|bharatiya sakshya adhiniyam|code of civil procedure|civil procedure code|constitution of india|indian constitution|constitution|संविधान)\b/gi;
+  const acts = new Set<ActCode>();
+  for (const m of text.matchAll(names)) {
+    const act = normaliseActCode(m[1]);
+    if (act) acts.add(act);
+  }
+  return acts;
+}
+
+/**
+ * The 2023 recodification pairs: each old code and the code that replaced it.
+ */
+const RECODIFICATION_PAIRS: [ActCode, ActCode][] = [['IPC', 'BNS'], ['CRPC', 'BNSS'], ['IEA', 'BSA']];
+const PAIR_CODE_NAMES =
+  'ipc|bns|crpc|cr\\.?p\\.?c|bnss|iea|bsa|indian penal code|bharatiya nyaya sanhita|code of criminal procedure|criminal procedure code|bharatiya nagarik suraksha sanhita|indian evidence act|evidence act|bharatiya sakshya adhiniyam';
+const SECTION_NUMBER = /\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?/;
+
+/**
+ * The provision a question about the recodification is actually about.
+ *
+ * "CrPC 125 maintenance - which section in BNSS?" names both codes, and the
+ * router model read it as "BNSS 125" - a real section (security for keeping
+ * the peace), so the answer would be confident and wrong. When a message names
+ * both codes of a pair and a section number belongs to only one of them, that
+ * one is the provision to look up; its row and the official correspondence
+ * give the other side. Works in both directions ("BNSS 144 in CrPC?").
+ *
+ * A number belongs to the code written just before it ("CrPC 125", "CrPC
+ * section 125") or just after it ("125 CrPC", "section 125 of the CrPC"); one
+ * between two codes ("IPC 302 BNS mein") belongs to the one before. When both
+ * codes carry a number ("IPC 302 vs BNS 103") nothing is decided here.
+ */
+export function recodifiedReference(text: string): { act: ActCode; section: string } | null {
+  const codes = [...text.matchAll(new RegExp(`\\b(${PAIR_CODE_NAMES})\\b`, 'gi'))]
+    .map((m) => ({ act: normaliseActCode(m[1]), start: m.index!, end: m.index! + m[0].length }))
+    .filter((c): c is { act: ActCode; start: number; end: number } => c.act !== null);
+  if (codes.length < 2) return null;
+
+  const numbered = new Map<ActCode, string>();
+  for (const m of text.matchAll(new RegExp(`\\b(${SECTION_NUMBER.source})(?![\\w(])`, 'gi'))) {
+    const start = m.index!;
+    const end = start + m[0].length;
+    const before = codes.find((c) => /^\s*(?:section|sec|s)?\.?\s*$/i.test(text.slice(c.end, start)));
+    const after = codes.find((c) => /^\s+(?:of\s+(?:the\s+)?)?$/i.test(text.slice(end, c.start)));
+    const owner = before ?? after;
+    if (owner && !numbered.has(owner.act)) {
+      numbered.set(owner.act, m[1].replace(/\s+/g, '').toUpperCase());
+    }
+  }
+
+  const mentioned = new Set(codes.map((c) => c.act));
+  for (const [oldAct, newAct] of RECODIFICATION_PAIRS) {
+    if (!mentioned.has(oldAct) || !mentioned.has(newAct)) continue;
+    const oldSection = numbered.get(oldAct);
+    const newSection = numbered.get(newAct);
+    if (oldSection && !newSection) return { act: oldAct, section: oldSection };
+    if (newSection && !oldSection) return { act: newAct, section: newSection };
+  }
+  return null;
+}
+
 /**
  * A reference to an Order (and optionally a Rule) of the Civil Procedure Code.
  *

@@ -423,9 +423,11 @@ function formatStatutes(statutes: StatuteRow[]): string {
         s.punishment ? `  Punishment: ${s.punishment}` : null,
         flags.length > 0 ? `  Classification: ${flags.join(', ')}` : null,
         s.triable_by ? `  Triable by: ${s.triable_by}` : null,
-        s.corresponding_section
-          ? `  Corresponds to: ${s.corresponding_act} Section ${s.corresponding_section}`
-          : null,
+        s.correspondence?.length
+          ? `  Corresponds to (official 2023 correspondence table): ${s.correspondence.join('; ')}`
+          : s.corresponding_section
+            ? `  Corresponds to: ${s.corresponding_act} Section ${s.corresponding_section}`
+            : null,
       ]
         .filter(Boolean)
         .join('\n');

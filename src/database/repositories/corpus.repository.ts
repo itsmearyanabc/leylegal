@@ -17,6 +17,44 @@ export interface PrecedentSearchOptions {
   sections?: string[] | null;
 }
 
+export interface CorrespondencePair {
+  new_act: string;
+  new_section: string;
+  old_act: string;
+  old_section: string;
+}
+
+const ACT_LABEL: Record<string, string> = { IPC: 'IPC', CRPC: 'CrPC', IEA: 'IEA', BNS: 'BNS', BNSS: 'BNSS', BSA: 'BSA' };
+const label = (act: string, section: string) => `${ACT_LABEL[act.toUpperCase()] ?? act} ${section}`;
+const base = (section: string) => section.split('(')[0].toUpperCase();
+
+/**
+ * "IPC 415 = BNS 318(1)", one entry per official pair touching this section,
+ * in old-section order. Old rows list what replaced them; new rows list what
+ * they replaced.
+ */
+export function describeCorrespondence(row: Pick<StatuteRow, 'act_code' | 'section_number'>, pairs: CorrespondencePair[]): string[] {
+  const act = row.act_code.toUpperCase();
+  const section = base(row.section_number);
+  let matching = pairs.filter(
+    (p) =>
+      (p.new_act.toUpperCase() === act && base(p.new_section) === section) ||
+      (p.old_act.toUpperCase() === act && base(p.old_section) === section),
+  );
+  // A sub-section row ("BNS 318(4)") lists its own pairing when the table
+  // records one, not every pairing of the section.
+  if (row.section_number.includes('(')) {
+    const own = matching.filter((p) =>
+      [p.new_act.toUpperCase() === act && p.new_section.toUpperCase(), p.old_act.toUpperCase() === act && p.old_section.toUpperCase()]
+        .includes(row.section_number.toUpperCase()),
+    );
+    if (own.length > 0) matching = own;
+  }
+  const order = (s: string) => Number(s.match(/^\d+/)?.[0] ?? 0);
+  matching.sort((a, b) => order(a.old_section) - order(b.old_section) || a.old_section.localeCompare(b.old_section) || a.new_section.localeCompare(b.new_section));
+  return [...new Set(matching.map((p) => `${label(p.old_act, p.old_section)} = ${label(p.new_act, p.new_section)}`))];
+}
+
 export interface HybridSearchOptions {
   queryText: string;
   embedding: number[] | null;
@@ -166,7 +204,7 @@ export class CorpusRepository {
     actCode: string | null,
     limit = 5,
   ): Promise<StatuteRow[]> {
-    return this.db.sql<StatuteRow[]>`
+    const rows = await this.db.sql<StatuteRow[]>`
       SELECT * FROM search_statutes(
         ${queryText},
         ${sectionNumber},
@@ -174,6 +212,23 @@ export class CorpusRepository {
         ${limit}
       )
     `;
+    if (rows.length === 0) return rows;
+
+    // The official old/new correspondence for every section found, on whichever
+    // side of the recodification the row sits.
+    const acts = rows.map((r) => r.act_code.toUpperCase());
+    const bases = rows.map((r) => r.section_number.split('(')[0].toUpperCase());
+    const pairs = await this.db.sql<CorrespondencePair[]>`
+      SELECT DISTINCT c.new_act, c.new_section, c.old_act, c.old_section
+        FROM statute_correspondence c
+        JOIN unnest(${acts}::text[], ${bases}::text[]) AS q(act, base)
+          ON (upper(c.new_act) = q.act AND split_part(upper(c.new_section), '(', 1) = q.base)
+          OR (upper(c.old_act) = q.act AND split_part(upper(c.old_section), '(', 1) = q.base)
+    `;
+    for (const row of rows) {
+      row.correspondence = describeCorrespondence(row, pairs);
+    }
+    return rows;
   }
 
   /**

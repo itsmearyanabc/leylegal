@@ -23,3 +23,9 @@ prisma/generated/
 data/corpus/
 data/*.jsonl
 !data/samples/
+
+# Official PDFs and parsed output for scripts/corpus (reproducible from the README)
+scripts/corpus/raw/
+scripts/corpus/out/
+scripts/corpus/*.html
+scripts/corpus/__pycache__/

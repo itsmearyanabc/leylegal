@@ -106,12 +106,20 @@ export class RagService {
     }
 
     onStage?.('retrieving');
-    const statutes = await this.corpus.searchStatutes(
+    const found = await this.corpus.searchStatutes(
       intent.searchQuery,
       intent.sectionNumber,
       intent.actCode,
       3,
     );
+
+    // When the named provision itself was found, the model gets that provision,
+    // its sub-sections and its official counterparts - not its neighbours by
+    // spelling. With the full Acts loaded, "BNSS 520" also matched BNSS 52 by
+    // number similarity (examination of a person accused of rape), which can
+    // only distract an answer about trials before High Courts.
+    const named = intent.sectionNumber ? found.filter((s) => s.match_type === 'EXACT' || s.match_type === 'RECODIFIED') : [];
+    const statutes = named.length > 0 ? named : found;
 
     if (statutes.length === 0) {
       /*
