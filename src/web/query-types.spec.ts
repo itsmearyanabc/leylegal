@@ -1,6 +1,8 @@
 import { CREDIT_COST } from '../credits/credits.service';
 import { ChatMessageRow, PrecedentRow, UserRow } from '../database/types';
 import { CnrNotFoundError } from '../ecourts/ecourts.service';
+import searchResponse from '../ecourts/__fixtures__/ecourtsindia-search-idfc.json';
+import { mapSearchResponse } from '../ecourts/party-search';
 import { ChatEvent, ChatService } from './chat.service';
 
 /**
@@ -47,6 +49,7 @@ function build(
     precedents?: PrecedentRow[];
     allowed?: boolean;
     lookup?: jest.Mock;
+    casesForQuestion?: jest.Mock;
     corpusJudgments?: number;
   } = {},
 ) {
@@ -129,6 +132,7 @@ function build(
 
   const ecourts = {
     lookup: over.lookup ?? jest.fn().mockResolvedValue({ cnr: 'BRMG030000191989', mocked: false }),
+    casesForQuestion: over.casesForQuestion ?? jest.fn().mockResolvedValue(null),
   };
   const analytics = { recordSearch: jest.fn().mockResolvedValue(undefined) };
   const corpus = {
@@ -297,6 +301,52 @@ describe('section lookup', () => {
 
     await ask(service, 'what is IPC 302');
     expect(credits.refund).not.toHaveBeenCalled();
+  });
+});
+
+describe('a named case with no reported judgment', () => {
+  // "idfc First bank vs aditya bhatia 6897" was answered "No judgments matched":
+  // Kanoon has no document with those parties, and eCourts has the case.
+  // eCourtsIndia's real answer to that search.
+  const reported = mapSearchResponse(searchResponse).cases[0];
+
+  it('is answered with the case on eCourts, and the search charge stands', async () => {
+    const casesForQuestion = jest.fn().mockResolvedValue({ query: 'idfc First bank vs aditya bhatia 6897', result: { totalHits: 1, cases: [reported] } });
+    const { service, credits } = build({ intent: 'PRECEDENT_SEARCH', precedents: [], casesForQuestion });
+
+    const events = await ask(service, 'idfc First bank vs aditya bhatia 6897');
+
+    expect(casesForQuestion).toHaveBeenCalledWith('idfc First bank vs aditya bhatia 6897');
+    expect(credits.refund).not.toHaveBeenCalled();
+    expect(answers(events)).toBe('No reported judgment found for "idfc First bank vs aditya bhatia 6897". One case on eCourts with these parties.');
+
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    const cases = (answer?.message.structured as { cases: { statusCost: number; items: { cnr: string; title: string; rows: { label: string; value: string }[] }[] } }).cases;
+    expect(cases.statusCost).toBe(CREDIT_COST.CASE_STATUS);
+    expect(cases.items[0]).toMatchObject({ cnr: 'DLCT010012342024', title: 'Idfc First Bank vs Aditya Bhatia 6897' });
+    expect(cases.items[0].rows).toContainEqual({ label: 'Case Status', value: 'Disposed on 2024-03-12' });
+  });
+
+  it('is still refunded when eCourts has nothing either', async () => {
+    const { service, credits } = build({ intent: 'PRECEDENT_SEARCH', precedents: [] });
+
+    const events = await ask(service, 'idfc First bank vs aditya bhatia 6897');
+
+    expect(credits.refund).toHaveBeenCalled();
+    expect(answers(events)).toContain('You have not been charged.');
+  });
+
+  it('does not search eCourts, or pay for it, when the judgment was found', async () => {
+    const casesForQuestion = jest.fn();
+    const { service, precedents } = build({ intent: 'PRECEDENT_SEARCH', precedents: [precedent('j1')], casesForQuestion });
+    precedents.search.mockResolvedValueOnce({
+      precedents: [precedent('j1')], totalMatches: 1, lexicalOnly: false, source: 'kanoon', latencyMs: 1,
+      namedCase: { name: 'Ram Kumar vs State of Bihar', found: true },
+    });
+
+    await ask(service, 'Ram Kumar vs State of Bihar');
+
+    expect(casesForQuestion).not.toHaveBeenCalled();
   });
 });
 

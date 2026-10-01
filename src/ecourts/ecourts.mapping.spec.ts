@@ -398,6 +398,28 @@ describe('the documented example response', () => {
   });
 });
 
+describe('a case type the provider does not know', () => {
+  /*
+   * DLCT010012342024 is an OMP (I) (COMM). eCourtsIndia has no code for it: it
+   * sends "UNKNOWN", labelled "Unrecognized case type" (both as in its real
+   * search response for that case), and no caseTypeRaw. The label was printed
+   * as the case type; the code would have been, once the label was refused.
+   */
+  const unknown = mapWith({
+    data: {
+      courtCaseData: { cnr: 'DLCT010012342024', caseType: 'UNKNOWN', registrationNumber: '79/2024', filingNumber: '831/2024', caseStatus: 'DISPOSED', petitioners: ['Idfc First Bank'] },
+      descriptions: { enumLookup: { caseType: { UNKNOWN: 'Unrecognized case type' }, caseStatus: { DISPOSED: 'Disposed' } } },
+    },
+  });
+
+  it('has no case type, rather than the placeholder or the code', () => {
+    expect(unknown.caseType).toBeNull();
+    expect(unknown.caseNumber).toBe('79/2024');
+    expect(formatCaseStatus(unknown)).toContain('• Case Type: Not available');
+    expect(formatCaseStatus(unknown)).not.toMatch(/unknown|unrecogni/i);
+  });
+});
+
 describe('a dismissed case', () => {
   /*
    * DISMISSED is in the documented caseStatus enum and matched none of the

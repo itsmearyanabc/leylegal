@@ -1,5 +1,6 @@
 import { statuteLabel } from '../ai/prompts';
 import { caseStatusRows } from '../ecourts/case-status.rows';
+import { caseMatchRows, caseTitle, CasesForQuestion } from '../ecourts/party-search';
 import { CaseStatus } from '../ecourts/ecourts.service';
 import { StatuteRow } from '../database/types';
 
@@ -554,6 +555,31 @@ export function formatCaseStatus(status: CaseStatus, today?: string): string {
   ]
     .filter((l) => l !== '')
     .join('\n');
+}
+
+/**
+ * The cases a party search found on eCourts, for a named case with no reported
+ * judgment (party-search.ts) - the same rows the website shows, and the CNR to
+ * send for the full status.
+ *
+ * `alone` when there are no judgments under it: then it is the whole reply and
+ * carries the caveat and the way back itself.
+ */
+export function formatCaseMatches(found: CasesForQuestion, statusCost: number, alone: boolean, today?: string): string {
+  const { result, query } = found;
+  const lines = [
+    alone ? `*No reported judgment found for "${query}".*` : `*Cases on eCourts for "${query}"*`,
+    alone
+      ? `${result.totalHits === 1 ? 'One case' : `${result.totalHits} cases`} on eCourts with these parties${result.cases.length < result.totalHits ? ` - the first ${result.cases.length}` : ''}:`
+      : '',
+  ];
+  result.cases.forEach((match, i) => {
+    lines.push('', `${i + 1}. *${match.cnr}* - ${caseTitle(match)}`);
+    for (const row of caseMatchRows(match, today)) lines.push(`   • ${row.label}: ${row.value}`);
+  });
+  lines.push('', `Send a CNR to see that case's full status (${statusCost} credit${statusCost === 1 ? '' : 's'}).`);
+  if (alone) lines.push('', CAVEAT, '', RETURN_TO_MENU);
+  return lines.filter((l, i, all) => !(l === '' && (i === 0 || all[i - 1] === ''))).join('\n');
 }
 
 /** Compact statute card, used when the LLM is unavailable. */

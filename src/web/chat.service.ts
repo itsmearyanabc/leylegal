@@ -18,7 +18,7 @@ import { AnalyticsRepository } from '../database/repositories/analytics.reposito
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { ChatRepository } from '../database/repositories/chat.repository';
 import { ChatMessageRow, PrecedentRow, UserRow } from '../database/types';
-import { withCaseRows } from '../ecourts/case-status.rows';
+import { forBrowser } from '../ecourts/for-browser';
 import { caseNumberIn, cnrNeededReply, matchEarlierCase } from '../ecourts/cnr-help';
 import { CnrNotFoundError, EcourtsService } from '../ecourts/ecourts.service';
 import { StageChannel } from './stage-channel';
@@ -508,6 +508,10 @@ export class ChatService {
     const searched = await this.precedents.search(intent, user.bar_council_state);
     const rows = searched.precedents;
 
+    // A named case with no judgment may still be a case - a district-court
+    // matter rarely has a reported judgment. See party-search.ts.
+    const cases = searched.namedCase?.found ? null : await this.ecourts.casesForQuestion(question);
+
     const citations = rows.map(
       (p) => p.neutral_citation ?? p.reporter_citations?.[0] ?? p.case_title,
     );
@@ -521,7 +525,7 @@ export class ChatService {
     // refund requests. The downside is bounded: an empty result costs at most
     // one Kanoon call, which is cheaper than the support mail.
     let emptyReason: string | null = null;
-    if (rows.length === 0) {
+    if (rows.length === 0 && !cases) {
       await this.credits.refund(user.id, user.role, reference, 'Search returned no authorities');
       charged = 0;
 
@@ -549,6 +553,9 @@ export class ChatService {
       role: 'assistant',
       content: rows.length
         ? `${rows.length} ${rows.length === 1 ? 'authority' : 'authorities'} on "${intent.searchQuery}"`
+        : cases
+          ? `No reported judgment found for "${cases.query}". ` +
+            `${cases.result.totalHits === 1 ? 'One case' : `${cases.result.totalHits} cases`} on eCourts with these parties.`
         : emptyReason === 'no-corpus'
           ? 'No judgment database is available on this deployment yet, so there is nothing to search. ' +
             'You have not been charged.'
@@ -568,6 +575,15 @@ export class ChatService {
         totalMatches: searched.totalMatches,
         emptyReason,
         items: rows.map(toPublicPrecedent),
+        // Cases on eCourts with the parties named; rows are added in forBrowser().
+        cases: cases
+          ? {
+              query: cases.query,
+              totalHits: cases.result.totalHits,
+              statusCost: CREDIT_COST.CASE_STATUS,
+              items: cases.result.cases,
+            }
+          : null,
       },
       latencyMs: searched.latencyMs,
       creditsCharged: charged,
@@ -580,7 +596,7 @@ export class ChatService {
       resolvedQuery: intent.searchQuery,
       intent: 'PRECEDENT_SEARCH',
       citations,
-      resultCount: rows.length,
+      resultCount: rows.length + (cases?.result.cases.length ?? 0),
       modelUsed: null,
       inputTokens: 0,
       outputTokens: 0,
@@ -775,7 +791,7 @@ function toPublic(row: ChatMessageRow): PublicChatMessage {
     content: row.content,
     intent: row.intent,
     citations: row.citations ?? [],
-    structured: withCaseRows(row.structured),
+    structured: forBrowser(row.structured),
     creditsCharged: row.credits_charged,
     guardrailFlagged: row.guardrail_flagged,
     error: row.error_detail,

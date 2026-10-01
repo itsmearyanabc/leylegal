@@ -1374,6 +1374,23 @@ function renderSources(sources) {
 function renderPrecedents(data, message) {
   const wrap = el('div');
 
+  // Cases on eCourts with the parties named, when Kanoon had no judgment by
+  // that name (party-search.ts). They answer the question asked, so they come
+  // first; any near-miss judgments follow under their own heading.
+  const cases = data.cases && data.cases.items && data.cases.items.length ? data.cases : null;
+  if (cases) {
+    if (!data.items.length) {
+      const note = el('div', 'alert info');
+      note.textContent = message.content;
+      wrap.appendChild(note);
+    }
+    wrap.appendChild(renderCaseMatches(cases));
+    if (!data.items.length) {
+      wrap.appendChild(precedentCaveat());
+      return wrap;
+    }
+  }
+
   // Nothing found. The server has already refunded the credits and worded the
   // message for the actual cause, so it is shown as-is rather than replaced
   // with a generic line that would contradict it.
@@ -1422,6 +1439,58 @@ function renderPrecedents(data, message) {
   // advocate reading a list of authorities has no use for it.
   if (data.items.length) {
     wrap.appendChild(precedentCaveat());
+  }
+
+  return wrap;
+}
+
+/**
+ * The cases a party search found on eCourts, each with the button that asks
+ * for its full status. The rows come from the server (party-search.ts) - the
+ * same disposed-case rule as the case card - so this only lays them out.
+ */
+function renderCaseMatches(cases) {
+  const wrap = el('div');
+
+  const heading = el('div');
+  heading.style.cssText = 'margin:13px 0;font-size:13.5px;color:var(--muted)';
+  heading.textContent = cases.items.length < cases.totalHits
+    ? cases.items.length + ' of ' + cases.totalHits + ' cases on eCourts for "' + cases.query + '"'
+    : (cases.totalHits === 1 ? 'The case' : cases.totalHits + ' cases') + ' on eCourts for "' + cases.query + '"';
+  wrap.appendChild(heading);
+
+  for (const item of cases.items) {
+    const card = el('div', 'case-card');
+    card.style.marginBottom = '13px';
+
+    const head = el('div', 'head');
+    head.appendChild(el('div', 'cnr', item.cnr));
+    head.appendChild(el('div', 'parties', item.title));
+    card.appendChild(head);
+
+    const rows = el('dl', 'case-rows');
+    for (const row of item.rows || []) {
+      rows.appendChild(el('dt', null, row.label));
+      rows.appendChild(el('dd', row.value === 'Not available' ? 'na' : null, row.value));
+    }
+    card.appendChild(rows);
+
+    const actions = el('div');
+    actions.style.cssText = 'padding:11px 17px;border-top:1px solid var(--border-soft)';
+    const cost = Number(cases.statusCost);
+    const check = el('button', 'btn secondary small',
+      'Check full status' + (cost > 0 ? ' (' + cost + ' credit' + (cost === 1 ? '' : 's') + ')' : ''));
+    check.type = 'button';
+    check.onclick = () => {
+      const box = $('#composer');
+      box.value = 'Check the status of CNR ' + item.cnr;
+      autoGrow();
+      submitQuestion();
+    };
+    actions.appendChild(check);
+    card.appendChild(actions);
+
+    wrap.appendChild(card);
   }
 
   return wrap;

@@ -1205,6 +1205,10 @@ export class ConversationService {
     const result = await this.precedents.search(intent, user.bar_council_state);
     const pageSize = this.precedents.pageSize;
 
+    // A named case with no judgment may still be a case - a district-court
+    // matter rarely has a reported judgment. The same step as the website's.
+    const cases = result.namedCase?.found ? null : await this.ecourts.casesForQuestion(originalText);
+
     /*
      * A search that found nothing is refunded, as it already was on the web.
      *
@@ -1216,18 +1220,24 @@ export class ConversationService {
      * back empty; one feature should not have two prices depending on which
      * screen it was asked from.
      */
-    if (result.precedents.length === 0) {
+    if (result.precedents.length === 0 && !cases) {
       await this.credits
         .refund(user.id, user.role, spendReference(job.waMessageId), 'Search returned no authorities')
         .catch((err) => this.logger.warn({ err }, 'Could not refund an empty precedent search'));
     }
 
-    const body = formatPrecedentPage(result.precedents, 0, pageSize, intent.searchQuery, {
-      lexicalOnly: result.lexicalOnly,
-      source: result.source,
-      namedCase: result.namedCase,
-      grouping: result.grouping,
-    });
+    const judgments = () =>
+      formatPrecedentPage(result.precedents, 0, pageSize, intent.searchQuery, {
+        lexicalOnly: result.lexicalOnly,
+        source: result.source,
+        namedCase: result.namedCase,
+        grouping: result.grouping,
+      });
+    const body = !cases
+      ? judgments()
+      : result.precedents.length === 0
+        ? Replies.formatCaseMatches(cases, CREDIT_COST.CASE_STATUS, true)
+        : `${Replies.formatCaseMatches(cases, CREDIT_COST.CASE_STATUS, false)}\n\n${judgments()}`;
     const delivery = await this.api.sendText(job.from, body);
 
     /*

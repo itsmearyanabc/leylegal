@@ -96,6 +96,7 @@ function build(
     precedents?: PrecedentRow[];
     conversations?: ReturnType<typeof conversationStore>;
     lookup?: jest.Mock;
+    casesForQuestion?: jest.Mock;
     allowed?: boolean;
     deliverable?: boolean;
     answerText?: string;
@@ -156,6 +157,7 @@ function build(
   const memory = { clear: jest.fn(), load: jest.fn().mockResolvedValue([]), append: jest.fn() };
   const ecourts = {
     lookup: over.lookup ?? jest.fn().mockResolvedValue({ cnr: 'BRMG030000191989', mocked: false }),
+    casesForQuestion: over.casesForQuestion ?? jest.fn().mockResolvedValue(null),
   };
   const balance = { free: 10, paid: 0, total: 10, monthlyAllowance: 30, unlimited: false };
   const credits = {

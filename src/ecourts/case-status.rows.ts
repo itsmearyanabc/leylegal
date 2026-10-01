@@ -39,6 +39,13 @@ export const NOT_AVAILABLE = 'Not available';
 /** eCourtsIndia's enumLookup text for a case-type code missing from its table. */
 const PROVIDER_PLACEHOLDER = /^unrecogni[sz]ed case type\b[\s:-]*/i;
 
+/**
+ * The code itself, for such a case: "UNKNOWN" - so on DLCT010012342024, an OMP
+ * (I) (COMM) with no caseTypeRaw to fall back on, the code was all that was
+ * left, and the card would have read "Case Type: UNKNOWN".
+ */
+const PROVIDER_UNKNOWN_CODE = /^unknown$/i;
+
 /** The calendar day in India - court dates are Indian dates, the server runs on UTC. */
 export function todayInIndia(now: Date = new Date()): string {
   return new Date(now.getTime() + 330 * 60_000).toISOString().slice(0, 10);
@@ -60,10 +67,10 @@ export function informativeDisposal(nature: string | null | undefined, statusLab
   return text;
 }
 
-/** A case type, or null for the provider's placeholder. */
+/** A case type, or null for the provider's placeholder label or its "UNKNOWN" code. */
 export function realCaseType(type: string | null | undefined): string | null {
   const text = type?.trim();
-  if (!text || PROVIDER_PLACEHOLDER.test(text)) return null;
+  if (!text || PROVIDER_PLACEHOLDER.test(text) || PROVIDER_UNKNOWN_CODE.test(text)) return null;
   return text;
 }
 

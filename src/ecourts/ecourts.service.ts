@@ -7,6 +7,7 @@ import { AppEnv } from '../config/env';
 import { isValidCnr } from '../ai/legal-patterns';
 import { SettingsService } from '../settings/settings.service';
 import { informativeDisposal, realCaseType } from './case-status.rows';
+import { CasesForQuestion, mapSearchResponse, partiesIn, PartySearchResult } from './party-search';
 
 export interface CaseStatus {
   cnr: string;
@@ -150,6 +151,9 @@ export class EcourtsMisconfiguredError extends Error {
 /** Cache successful lookups for an hour; cause lists move daily, not hourly. */
 const CACHE_TTL_SECONDS = 3600;
 
+/** Cases shown for a party search - the CNR of the right one is a tap away. */
+const PARTY_SEARCH_PAGE = 5;
+
 /**
  * Case status lookup by CNR.
  *
@@ -178,6 +182,7 @@ export class EcourtsService {
   private readonly breaker: CircuitBreaker;
 
   private readonly cache = new LruCache<CaseStatus>(1_000, CACHE_TTL_SECONDS);
+  private readonly partyCache = new LruCache<PartySearchResult>(1_000, CACHE_TTL_SECONDS);
 
   /**
    * Why the last lookup could not reach the provider, if it was our fault.
@@ -227,6 +232,80 @@ export class EcourtsService {
 
     this.cache.set(cacheKey, result, CACHE_TTL_SECONDS);
     return result;
+  }
+
+  /**
+   * Cases on eCourts with these parties - see party-search.ts.
+   *
+   * Every word of each name must match; when that finds nothing, once more
+   * with the provider's one-typo-per-word matching ("Bhatiya" for "Bhatia").
+   * So a miss costs two searches and a hit one. Mock mode finds nothing: it
+   * invents a case for a CNR it is given, and inventing which cases a person
+   * is party to is not something to do even as a placeholder.
+   */
+  /**
+   * The cases on eCourts for the named case in a question, or null - when it
+   * names none, nothing matches, or the search fails. A failure is logged and
+   * costs the answer nothing: the judgments are still shown.
+   *
+   * Called by both channels when judgment search did not find the named case.
+   */
+  async casesForQuestion(question: string): Promise<CasesForQuestion | null> {
+    const parties = partiesIn(question);
+    if (!parties) return null;
+    try {
+      const result = await this.searchByParties(parties.petitioner, parties.respondent);
+      return result.cases.length > 0 ? { query: parties.query, result } : null;
+    } catch (err) {
+      this.logger.warn({ err }, 'eCourts party search failed - answering with judgments only');
+      return null;
+    }
+  }
+
+  async searchByParties(petitioner: string, respondent: string | null): Promise<PartySearchResult> {
+    if (this.mode !== 'http') return { totalHits: 0, cases: [] };
+
+    const key = `${petitioner}|${respondent ?? ''}`.toLowerCase().replace(/\s+/g, ' ');
+    const cached = this.partyCache.get(key);
+    if (cached) return cached;
+
+    let result = await this.searchOnce(petitioner, respondent, 'all');
+    if (result.cases.length === 0) result = await this.searchOnce(petitioner, respondent, 'fuzzy');
+
+    this.partyCache.set(key, result, CACHE_TTL_SECONDS);
+    return result;
+  }
+
+  private async searchOnce(petitioner: string, respondent: string | null, nameMatchMode: 'all' | 'fuzzy'): Promise<PartySearchResult> {
+    const baseUrl = this.settings.get('ECOURTS_BASE_URL') || this.env.ECOURTS_BASE_URL;
+    const apiKey = this.settings.get('ECOURTS_API_KEY') || this.env.ECOURTS_API_KEY;
+    if (!baseUrl) throw new Error('eCourts mode is set to http but no provider base URL is configured');
+
+    const params = new URLSearchParams({ petitioners: petitioner, nameMatchMode, pageSize: String(PARTY_SEARCH_PAGE) });
+    if (respondent) params.append('respondents', respondent);
+    const url = `${baseUrl.replace(/\/$/, '')}/search?${params.toString()}`;
+
+    return this.breaker.execute(
+      async () => {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { accept: 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
+          signal: AbortSignal.timeout(this.env.ECOURTS_TIMEOUT_MS),
+        });
+        if (response.status === 401 || response.status === 403) {
+          throw new EcourtsMisconfiguredError(`${new URL(url).host} rejected the API key with ${response.status} on case search.`);
+        }
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          throw new Error(`eCourts case search returned ${response.status}: ${body.slice(0, 200)}`);
+        }
+        if (!(response.headers.get('content-type') ?? '').includes('json')) {
+          throw new EcourtsMisconfiguredError(`${new URL(url).host} answered case search with something other than JSON.`);
+        }
+        return mapSearchResponse(await response.json());
+      },
+      (err) => !(err instanceof EcourtsMisconfiguredError),
+    );
   }
 
   /** The lookup itself, wrapped so the configuration fault can be tracked. */

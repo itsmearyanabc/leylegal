@@ -155,7 +155,7 @@ function build(
     }),
   };
   const memory = { clear: jest.fn(), load: jest.fn().mockResolvedValue([]), append: jest.fn() };
-  const ecourts = { lookup: jest.fn().mockResolvedValue({ cnr: 'X', mocked: true }) };
+  const ecourts = { lookup: jest.fn().mockResolvedValue({ cnr: 'X', mocked: true }), casesForQuestion: jest.fn().mockResolvedValue(null) };
   const credits = {
     balance: jest.fn().mockResolvedValue({ free: 10, paid: 0, total: 10, monthlyAllowance: 30, unlimited: false }),
     peek: jest.fn().mockResolvedValue({ free: 10, paid: 0, total: 10, monthlyAllowance: 30, unlimited: false }),
