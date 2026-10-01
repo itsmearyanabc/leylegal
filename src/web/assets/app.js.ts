@@ -658,7 +658,11 @@ function toggleSidebar() {
   if (state.sidebarOpen) {
     const scrim = el('div', 'scrim');
     scrim.onclick = toggleSidebar;
-    document.body.appendChild(scrim);
+    // Beside the sidebar, inside #app - not on <body>. #app's fade-in keeps it
+    // a stacking context, so the sidebar's z-index only ranks within #app; a
+    // scrim on <body> sat above the whole of it, the open drawer included, and
+    // on a phone every tap on a past conversation landed on the scrim.
+    $('#app').appendChild(scrim);
   }
 }
 

@@ -120,7 +120,9 @@ export class GuardrailsService {
       // Without this the advocate cannot tell the answer was altered, and an
       // answer that quietly lost its authority reads as an unsupported
       // assertion.
-      text += '\n\n_One or more references could not be verified against the case law database and were removed._';
+      // "Case law database" alone was wrong whenever the struck reference was a
+      // section - which, with a corpus of a few dozen sections, is most of them.
+      text += "\n\n_One or more references could not be verified against Ley Legal's database of statutes and judgments and were removed._";
     }
 
     const triggered = removed.length > 0 || flagged.length > 0;

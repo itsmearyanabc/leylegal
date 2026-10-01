@@ -15,6 +15,7 @@ import {
   buildSmallTalkPrompt,
   buildUnverifiedProvisionPrompt,
 } from './prompts';
+import { nonexistentProvision } from './provision-range';
 import { LlmMessage } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
 
@@ -84,6 +85,25 @@ export class RagService {
     onStage?: RagProgress,
   ): Promise<RagAnswer> {
     const started = Date.now();
+
+    // A number past the end of its Act has a certain answer, and it is not
+    // one to hand to a model told to stop when it is unsure.
+    const impossible = nonexistentProvision(intent.actCode, intent.sectionNumber);
+    if (impossible) {
+      return {
+        text: impossible,
+        citations: [],
+        passages: [],
+        statutes: [],
+        model: 'rule:provision-range',
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs: Date.now() - started,
+        guardrailTriggered: false,
+        guardrailReason: null,
+        mocked: false,
+      };
+    }
 
     onStage?.('retrieving');
     const statutes = await this.corpus.searchStatutes(
