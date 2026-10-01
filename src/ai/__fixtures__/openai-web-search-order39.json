@@ -1,0 +1,129 @@
+{
+  "id": "resp_0472d230456ec307006abeda2fc3ac87d2b4858a2a449ee548",
+  "object": "response",
+  "created_at": 1790892591,
+  "status": "completed",
+  "access_programs": null,
+  "background": false,
+  "billing": {
+    "payer": "developer"
+  },
+  "completed_at": 1790892594,
+  "error": null,
+  "frequency_penalty": 0.0,
+  "incomplete_details": null,
+  "instructions": "You help Indian advocates. Ley Legal's verified sources - its database of Acts, Indian Kanoon and eCourts - had nothing for this question, so you search the web.\n\n- Answer in at most 120 words, in English, from the pages you cite and nothing else.\n- Cite a source for every fact.\n- Prefer official sources: court websites (sci.gov.in, ecourts.gov.in, High Court and district court sites), indiacode.nic.in, egazette.gov.in.\n- Never state a section number, case name, citation, date, party or outcome that is not in a page you cite. Do not fill gaps.\n- If the pages you find do not answer the question, reply with exactly: NO_RESULT",
+  "max_output_tokens": 600,
+  "max_tool_calls": null,
+  "model": "gpt-4.1-mini-2025-04-14",
+  "moderation": null,
+  "output": [
+    {
+      "id": "ws_0472d230456ec307006abeda2fecfc87d2842a264f090b1efb",
+      "type": "web_search_call",
+      "status": "completed",
+      "action": {
+        "type": "search",
+        "queries": [
+          "Find the text of this provision of Indian law, or a reliable summary of what it says (Order 39 Rule 1 of the Civil Procedure Code (CPC)).\\n\\nThe advocate asked: Order 39 Rule 1 CPC"
+        ],
+        "query": "Find the text of this provision of Indian law, or a reliable summary of what it says (Order 39 Rule 1 of the Civil Procedure Code (CPC)).\\n\\nThe advocate asked: Order 39 Rule 1 CPC"
+      }
+    },
+    {
+      "id": "msg_0472d230456ec307006abeda30e03c87d2993e2a653b5ad5ae",
+      "type": "message",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "end_index": 749,
+              "start_index": 641,
+              "title": "CPC Order 39 Rule 1: Cases in which temporary injunction may be granted | IndiaCode",
+              "url": "https://indiacode.ecourtsindia.com/cpc/order/xxxix/rule/1/?utm_source=openai"
+            }
+          ],
+          "logprobs": [],
+          "text": "Order 39 Rule 1 of the Code of Civil Procedure, 1908, allows courts to grant temporary injunctions in certain situations:\n\n- If property in dispute is at risk of being wasted, damaged, or alienated by any party, or wrongfully sold in execution of a decree.\n\n- If the defendant threatens or intends to remove or dispose of property to defraud creditors.\n\n- If the defendant threatens to dispossess the plaintiff or cause injury related to any property in dispute.\n\nIn such cases, the court may issue a temporary injunction to restrain these actions or make other orders to prevent harm until the suit is resolved or further orders are given. ([indiacode.ecourtsindia.com](https://indiacode.ecourtsindia.com/cpc/order/xxxix/rule/1/?utm_source=openai)) "
+        }
+      ],
+      "role": "assistant"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0.0,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "in_memory",
+  "reasoning": {
+    "context": null,
+    "effort": null,
+    "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "auto",
+  "store": true,
+  "temperature": 1.0,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "required",
+  "tool_usage": {
+    "image_gen": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "total_tokens": 0
+    },
+    "web_search": {
+      "num_requests": 1
+    }
+  },
+  "tools": [
+    {
+      "type": "web_search",
+      "return_token_budget": "default",
+      "search_content_types": [
+        "text"
+      ],
+      "search_context_size": "low",
+      "user_location": {
+        "type": "approximate",
+        "city": null,
+        "country": "IN",
+        "region": null,
+        "timezone": "Asia/Kolkata"
+      }
+    }
+  ],
+  "top_logprobs": 0,
+  "top_p": 1.0,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 8732,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 168,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 8900
+  },
+  "user": null,
+  "metadata": {}
+}

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { IntentService } from '../ai/intent.service';
-import { extractCnr } from '../ai/legal-patterns';
+import { extractCnr, isValidCnr } from '../ai/legal-patterns';
+import { costLine, UnverifiedInfo, WebFallbackService } from '../ai/web-fallback';
 import {
   NOT_AVAILABLE,
   PrecedentsService,
@@ -37,7 +38,7 @@ export type ChatEvent =
   | { type: 'answer'; message: PublicChatMessage; credits: CreditBalance; charged: number }
   | { type: 'error'; code: string; message: string; credits?: CreditBalance };
 
-export type ChatStage = 'classifying' | 'looking-up' | 'searching' | RagStage;
+export type ChatStage = 'classifying' | 'looking-up' | 'searching' | 'searching-web' | RagStage;
 
 export interface PublicChatMessage {
   id: string;
@@ -103,6 +104,7 @@ export class ChatService {
     private readonly analytics: AnalyticsRepository,
     private readonly corpus: CorpusRepository,
     private readonly registry: ProviderRegistry,
+    private readonly web: WebFallbackService,
   ) {}
 
   /**
@@ -436,6 +438,28 @@ export class ChatService {
         charged: decision.charged,
       };
     } catch (err) {
+      // eCourts has no record of a well-formed CNR: what the web has, apart and
+      // marked unverified, for the credit already taken (web-fallback.ts).
+      if (err instanceof CnrNotFoundError && isValidCnr(cnr)) {
+        yield { type: 'stage', stage: 'searching-web' };
+        const unverified = await this.web.find('cnr', question, cnr);
+        if (unverified) {
+          const charged = (await this.credits.chargeUnverified(user.id, user.role, reference)) ?? decision.charged;
+          const message = await this.chats.appendMessage({
+            threadId,
+            userId: user.id,
+            role: 'assistant',
+            content: `eCourts has no record of CNR ${cnr}.\n\n${costLine(charged, true)}`,
+            intent: 'CASE_STATUS',
+            structured: { kind: 'notice', unverified },
+            latencyMs: Date.now() - started,
+            creditsCharged: charged,
+          });
+          yield { type: 'answer', message: toPublic(message), credits: await this.credits.peek(user.id, user.role), charged };
+          return;
+        }
+      }
+
       const reason =
         err instanceof CnrNotFoundError
           ? `No case found for CNR ${cnr}. Check the 16-character number and try again.`
@@ -525,9 +549,18 @@ export class ChatService {
     // refund requests. The downside is bounded: an empty result costs at most
     // one Kanoon call, which is cheaper than the support mail.
     let emptyReason: string | null = null;
+    let unverified: UnverifiedInfo | null = null;
     if (rows.length === 0 && !cases) {
-      await this.credits.refund(user.id, user.role, reference, 'Search returned no authorities');
-      charged = 0;
+      // Nothing from Kanoon or eCourts: what the web has, apart and marked
+      // unverified, for one credit (web-fallback.ts) - or the refund.
+      yield { type: 'stage', stage: 'searching-web' };
+      unverified = await this.web.find('judgment', question, intent.searchQuery);
+      if (unverified) {
+        charged = (await this.credits.chargeUnverified(user.id, user.role, reference)) ?? charged;
+      } else {
+        await this.credits.refund(user.id, user.role, reference, 'Search returned no authorities');
+        charged = 0;
+      }
 
       // Said plainly, because the two causes need different actions from
       // whoever reads it. "No judgments found" on a deployment with nothing to
@@ -556,6 +589,8 @@ export class ChatService {
         : cases
           ? `No reported judgment found for "${cases.query}". ` +
             `${cases.result.totalHits === 1 ? 'One case' : `${cases.result.totalHits} cases`} on eCourts with these parties.`
+        : unverified
+          ? `No judgments matched "${intent.searchQuery}" in Ley Legal's sources. ${costLine(charged, true)}`
         : emptyReason === 'no-corpus'
           ? 'No judgment database is available on this deployment yet, so there is nothing to search. ' +
             'You have not been charged.'
@@ -584,6 +619,7 @@ export class ChatService {
               items: cases.result.cases,
             }
           : null,
+        unverified,
       },
       latencyMs: searched.latencyMs,
       creditsCharged: charged,
@@ -657,14 +693,24 @@ export class ChatService {
     }
 
     const answer = await answerPromise;
-    const text = answer.text.trim();
+    let text = answer.text.trim();
     const mocked = answer.mocked || this.registry.isFullyMocked;
 
-    // No official text for the provision asked about: the reply says so, and
-    // an answer was not delivered - refunded, as a search that found nothing is.
-    if (answer.unavailable && charged > 0) {
-      await this.credits.refund(user.id, user.role, reference, 'No official text for that provision');
-      charged = 0;
+    // No official text for the provision asked about. What the web has, apart
+    // and marked unverified, for one credit (web-fallback.ts); if it has
+    // nothing either, an answer was not delivered - refunded, as a search that
+    // found nothing is.
+    let unverified: UnverifiedInfo | null = null;
+    if (answer.unavailable) {
+      yield { type: 'stage', stage: 'searching-web' };
+      unverified = await this.web.find('provision', question, answer.provision ?? null);
+      if (unverified) {
+        charged = (await this.credits.chargeUnverified(user.id, user.role, reference)) ?? charged;
+      } else if (charged > 0) {
+        await this.credits.refund(user.id, user.role, reference, 'No official text for that provision');
+        charged = 0;
+      }
+      text = `${text}\n\n${costLine(charged, unverified !== null)}`;
     }
 
     const message = await this.chats.appendMessage({
@@ -695,6 +741,8 @@ export class ChatService {
           date: p.judgment_date,
           paragraph: p.para_number,
         })),
+        // Shown after the answer, in its own marked section - never as part of it.
+        unverified,
       },
       modelUsed: answer.model,
       inputTokens: answer.inputTokens,

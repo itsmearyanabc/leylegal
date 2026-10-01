@@ -184,6 +184,7 @@ function build(
     transcription as never,
     registry as never,
     env as never,
+    { find: jest.fn().mockResolvedValue(null) } as never,
   );
 
   return { service, api, users, conversations, precedents, ecourts, memory, credits };

@@ -34,6 +34,12 @@ export const CREDIT_COST = {
    * Charging for it would bill the advocate for scrolling.
    */
   PRECEDENT_SEARCH: 2,
+  /**
+   * An answer only the web had - shown apart and marked unverified (see
+   * web-fallback.ts) when every verified source came up empty. Cheaper than a
+   * verified answer, and not free: each one is a paid web search.
+   */
+  UNVERIFIED_ANSWER: 1,
 } as const;
 
 export type CreditAction = keyof typeof CREDIT_COST;
@@ -314,6 +320,39 @@ export class CreditsService {
     } catch (err) {
       this.logger.warn({ err, userId, reference }, 'Credit refund failed');
     }
+  }
+
+  /**
+   * Charge a question exactly one credit, the price of an unverified answer.
+   *
+   * Refunds work by reference, so whatever was charged under the question's
+   * reference is refunded and one credit spent under its own. What was
+   * refunded decides, not what the caller believes was charged: nothing
+   * refunded means nothing had been charged - a follow-up to a question
+   * already paid for - and it stays free. If the refund fails the original
+   * charge stands and nothing more is taken: never both. Returns what the
+   * question now costs, or null when the original charge stands.
+   */
+  async chargeUnverified(userId: string, role: UserRole, reference: string): Promise<number | null> {
+    if (this.isUnlimited(role)) return 0;
+
+    let refunded = 0;
+    try {
+      ({ refunded } = await this.credits.refundByReference(userId, reference, 'Unverified answer - charged at one credit'));
+    } catch (err) {
+      this.logger.warn({ err, userId, reference }, 'Could not set the charge for an unverified answer; the original charge stands');
+      return null;
+    }
+    if (refunded <= 0) return 0;
+
+    const decision = await this.spend({
+      userId,
+      role,
+      cost: CREDIT_COST.UNVERIFIED_ANSWER,
+      action: 'UNVERIFIED_ANSWER',
+      reference: `${reference}:unverified`,
+    });
+    return decision.allowed ? decision.charged : 0;
   }
 
   /**

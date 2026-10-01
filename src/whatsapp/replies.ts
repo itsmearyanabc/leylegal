@@ -1,4 +1,5 @@
 import { statuteLabel } from '../ai/prompts';
+import { costLine, UnverifiedInfo } from '../ai/web-fallback';
 import { caseStatusRows } from '../ecourts/case-status.rows';
 import { caseMatchRows, caseTitle, CasesForQuestion } from '../ecourts/party-search';
 import { CaseStatus } from '../ecourts/ecourts.service';
@@ -580,6 +581,33 @@ export function formatCaseMatches(found: CasesForQuestion, statusCost: number, a
   lines.push('', `Send a CNR to see that case's full status (${statusCost} credit${statusCost === 1 ? '' : 's'}).`);
   if (alone) lines.push('', CAVEAT, '', RETURN_TO_MENU);
   return lines.filter((l, i, all) => !(l === '' && (i === 0 || all[i - 1] === ''))).join('\n');
+}
+
+/**
+ * Unverified information from the web (web-fallback.ts), for the end of a
+ * reply: what the cited pages say, the sources, and the note. Inline citations
+ * become "title (url)" - WhatsApp shows a bare URL as a link, not markdown.
+ */
+export function formatUnverified(info: UnverifiedInfo): string {
+  return [
+    '⚠️ *Unverified information - found on the internet*',
+    '',
+    info.text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '$1 ($2)'),
+    '',
+    '*Sources*',
+    ...info.sources.map((s, i) => `${i + 1}. ${s.title} - ${s.url}`),
+    '',
+    `_${info.note}_`,
+  ].join('\n');
+}
+
+/**
+ * A whole reply for a question no verified source could answer but the web
+ * could: what was not found, what it cost, the unverified section, the caveat
+ * and the way back.
+ */
+export function unverifiedReply(notFound: string, cost: number, info: UnverifiedInfo): string {
+  return [notFound, '', costLine(cost, true), '', formatUnverified(info), '', CAVEAT, '', RETURN_TO_MENU].join('\n');
 }
 
 /** Compact statute card, used when the LLM is unavailable. */

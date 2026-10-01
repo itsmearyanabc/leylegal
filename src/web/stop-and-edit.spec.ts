@@ -168,6 +168,7 @@ function service() {
   const chat = new ChatService(
     chats as never, intents as never, rag as never, {} as never, {} as never,
     credits as never, { recordSearch: jest.fn() } as never, {} as never, { isFullyMocked: false } as never,
+    { find: jest.fn().mockResolvedValue(null) } as never,
   );
   return { chat, chats, credits };
 }

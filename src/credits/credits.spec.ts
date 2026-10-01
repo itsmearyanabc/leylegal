@@ -317,3 +317,46 @@ describe('CreditsService.grantSignupBonus', () => {
     expect(repo.grant).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * An answer only the web had is charged one credit (web-fallback.ts) - set from
+ * what was refunded, never from what the caller believes was charged.
+ */
+describe('charging an unverified answer', () => {
+  it('refunds the search and takes one credit under its own reference', async () => {
+    const { service, repo } = build();
+    repo.refundByReference.mockResolvedValueOnce({ refunded: 2, free: 30, paid: 0 });
+
+    expect(await service.chargeUnverified('u1', 'GUEST_LAWYER', 'spend:web:msg-1')).toBe(1);
+    expect(repo.refundByReference).toHaveBeenCalledWith('u1', 'spend:web:msg-1', 'Unverified answer - charged at one credit');
+    expect(repo.spend).toHaveBeenCalledWith(expect.objectContaining({ reference: 'spend:web:msg-1:unverified' }));
+  });
+
+  it('keeps a follow-up that was never charged free', async () => {
+    const { service, repo } = build();
+    repo.refundByReference.mockResolvedValueOnce({ refunded: 0, free: 30, paid: 0 });
+
+    expect(await service.chargeUnverified('u1', 'GUEST_LAWYER', 'spend:wa:wamid.1')).toBe(0);
+    expect(repo.spend).not.toHaveBeenCalled();
+  });
+
+  it('never charges both: when the refund fails, the original charge stands alone', async () => {
+    const { service, repo } = build();
+    repo.refundByReference.mockRejectedValueOnce(new Error('database down'));
+
+    expect(await service.chargeUnverified('u1', 'GUEST_LAWYER', 'spend:web:msg-1')).toBeNull();
+    expect(repo.spend).not.toHaveBeenCalled();
+  });
+
+  it('moves nothing for an unlimited role', async () => {
+    const { service, repo } = build();
+
+    expect(await service.chargeUnverified('u1', 'SUPER_ADMIN', 'spend:web:msg-1')).toBe(0);
+    expect(repo.refundByReference).not.toHaveBeenCalled();
+    expect(repo.spend).not.toHaveBeenCalled();
+  });
+
+  it('costs one credit', () => {
+    expect(CREDIT_COST.UNVERIFIED_ANSWER).toBe(1);
+  });
+});

@@ -194,6 +194,18 @@ const envSchema = z.object({
   /** Override to point the OpenAI client at any wire-compatible endpoint. */
   OPENAI_BASE_URL: z.string().default(''),
 
+  /**
+   * Unverified web information, when every verified source came up empty - a
+   * section with no official text, a judgment neither Kanoon nor eCourts has, a
+   * CNR eCourts does not know. Searched with OpenAI's web_search tool, shown
+   * apart from the answer with its source links and an "unverified" note, and
+   * charged one credit. `off` keeps the plain "not available" reply.
+   */
+  WEB_FALLBACK: z.enum(['on', 'off']).default('on'),
+  /** A model the Responses API web_search tool supports (gpt-4.1, gpt-4.1-mini, gpt-5.x). */
+  WEB_SEARCH_MODEL: z.string().default('gpt-4.1-mini'),
+  WEB_FALLBACK_TIMEOUT_MS: z.coerce.number().int().min(3000).max(60000).default(25000),
+
   // DeepSeek - OpenAI-compatible wire format, markedly cheaper per token.
   DEEPSEEK_API_KEY: z.string().default(''),
   DEEPSEEK_SYNTHESIS_MODEL: z.string().default('deepseek-chat'),

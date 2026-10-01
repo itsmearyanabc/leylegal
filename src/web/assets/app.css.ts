@@ -320,6 +320,18 @@ button { cursor:pointer; }
 .sources ul { margin:9px 0 0; padding-left:19px; }
 .sources li { font-size:12.5px; color:var(--muted); margin-bottom:4px; }
 
+/* Unverified information from the web - apart from the answer, in yellow. */
+.unverified { margin-top:15px; padding:13px 15px; border-radius:var(--radius); background:#FFF8D6; border:1px solid #E9C64A; color:#4A3B00; }
+.unverified-head { font-weight:650; font-size:13px; margin-bottom:7px; color:#7A5C00; }
+.unverified-text { font-size:14px; line-height:1.6; }
+.unverified a { color:inherit; text-decoration:underline; text-underline-offset:2px; }
+.unverified-sources { margin:9px 0 0; padding-left:19px; font-size:12.5px; }
+.unverified-sources li { margin-bottom:3px; overflow-wrap:anywhere; }
+.unverified-note { margin-top:10px; padding-top:9px; border-top:1px solid #E9C64A; font-size:12px; font-style:italic; }
+[data-theme="dark"] .unverified { background:#2B2610; border-color:#7A6A22; color:#EFE3A8; }
+[data-theme="dark"] .unverified-head { color:#F2D46B; }
+[data-theme="dark"] .unverified-note { border-color:#7A6A22; }
+
 .caveat {
   margin-top:13px; font-size:12px; color:var(--dim); line-height:1.55;
   border-top:1px solid var(--border-soft); padding-top:10px;

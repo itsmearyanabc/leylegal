@@ -9,6 +9,7 @@ import { ProviderRegistry } from './providers/provider.registry';
 import { RagService } from './rag.service';
 import { StatuteFetcher } from './statute-fetcher';
 import { TranscriptionService } from './transcription.service';
+import { WebFallbackService } from './web-fallback';
 
 const providers = [
   ProviderRegistry,
@@ -20,6 +21,7 @@ const providers = [
   PrecedentsService,
   TranscriptionService,
   ChatMemoryService,
+  WebFallbackService,
 ];
 
 @Module({ imports: [KanoonModule], providers, exports: providers })

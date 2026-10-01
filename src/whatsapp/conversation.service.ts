@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
 import { IntentService } from '../ai/intent.service';
-import { extractCnr } from '../ai/legal-patterns';
+import { extractCnr, isValidCnr } from '../ai/legal-patterns';
+import { costLine, WebFallbackService } from '../ai/web-fallback';
 import { looksLikeCnrAttempt, looksLikeEnrolmentAttempt } from './onboarding';
 import { ChatMemoryService } from '../ai/memory/chat-memory.service';
 import { PrecedentsService, formatPrecedentPage } from '../ai/precedents.service';
@@ -181,6 +182,7 @@ export class ConversationService {
     private readonly transcription: TranscriptionService,
     private readonly registry: ProviderRegistry,
     @InjectEnv() private readonly env: AppEnv,
+    private readonly web: WebFallbackService,
   ) {}
 
   async handle(job: InboundMessageJob): Promise<void> {
@@ -1154,6 +1156,17 @@ export class ConversationService {
        * - a repeat lookup, an unlimited role - matches no rows and does
        * nothing.
        */
+      // eCourts has no record of a well-formed CNR: what the web has, apart and
+      // marked unverified, for one credit (web-fallback.ts) - as on the website.
+      if (err instanceof CnrNotFoundError && isValidCnr(cnr)) {
+        const unverified = await this.web.find('cnr', originalQuery, cnr);
+        if (unverified) {
+          const cost = (await this.credits.chargeUnverified(user.id, user.role, spendReference(job.waMessageId))) ?? CREDIT_COST.CASE_STATUS;
+          await this.api.sendText(user.phone_number, Replies.unverifiedReply(`eCourts has no record of CNR ${cnr}.`, cost, unverified));
+          return;
+        }
+      }
+
       await this.credits
         .refund(user.id, user.role, spendReference(job.waMessageId), 'Case status lookup failed')
         .catch((refundErr) => this.logger.warn({ refundErr, cnr }, 'Could not refund a failed lookup'));
@@ -1220,7 +1233,15 @@ export class ConversationService {
      * back empty; one feature should not have two prices depending on which
      * screen it was asked from.
      */
-    if (result.precedents.length === 0 && !cases) {
+    // Nothing from Kanoon or eCourts: what the web has, apart and marked
+    // unverified, for one credit (web-fallback.ts) - or the refund below.
+    const unverified =
+      result.precedents.length === 0 && !cases ? await this.web.find('judgment', originalText, intent.searchQuery) : null;
+    const unverifiedCost = unverified
+      ? ((await this.credits.chargeUnverified(user.id, user.role, spendReference(job.waMessageId))) ?? CREDIT_COST.PRECEDENT_SEARCH)
+      : 0;
+
+    if (result.precedents.length === 0 && !cases && !unverified) {
       await this.credits
         .refund(user.id, user.role, spendReference(job.waMessageId), 'Search returned no authorities')
         .catch((err) => this.logger.warn({ err }, 'Could not refund an empty precedent search'));
@@ -1233,7 +1254,9 @@ export class ConversationService {
         namedCase: result.namedCase,
         grouping: result.grouping,
       });
-    const body = !cases
+    const body = unverified
+      ? Replies.unverifiedReply(`*No judgments matched "${intent.searchQuery}" in Ley Legal's sources.*`, unverifiedCost, unverified)
+      : !cases
       ? judgments()
       : result.precedents.length === 0
         ? Replies.formatCaseMatches(cases, CREDIT_COST.CASE_STATUS, true)
@@ -1385,15 +1408,26 @@ export class ConversationService {
 
     const answer = await this.rag.answer(intent, history);
 
-    // No official text for the provision asked about: the reply says so rather
-    // than answering, and the charge taken in answerSearch() goes back.
-    if (answer.unavailable) {
+    // No official text for the provision asked about. What the web has, apart
+    // and marked unverified, for one credit (web-fallback.ts); if nothing, the
+    // reply says so and the charge taken in answerSearch() goes back.
+    const unverified = answer.unavailable ? await this.web.find('provision', originalText, answer.provision ?? null) : null;
+    let unverifiedCost = 0;
+    if (unverified) {
+      unverifiedCost = (await this.credits.chargeUnverified(user.id, user.role, spendReference(job.waMessageId))) ?? CREDIT_COST.SECTION_LOOKUP;
+    } else if (answer.unavailable) {
       await this.credits.refund(user.id, user.role, spendReference(job.waMessageId), 'No official text for that provision');
     }
 
     let text = answer.text.trim();
     if (!text) {
       text = 'I could not produce an answer for that. Try rephrasing, or type *menu* for other options.';
+    }
+    if (answer.unavailable) {
+      text += `\n\n${costLine(unverifiedCost, unverified !== null)}`;
+    }
+    if (unverified) {
+      text += `\n\n${Replies.formatUnverified(unverified)}`;
     }
     if (answer.mocked || this.registry.isFullyMocked) {
       text += Replies.MOCK_MODE_NOTICE;

@@ -117,7 +117,10 @@ describe('a provision the corpus does not hold', () => {
     expect(answer.text).toContain(`I don't have the official text of *Section 138 of the Negotiable Instruments Act, 1881*`);
     expect(answer.text).toContain(`won't describe it from memory`);
     expect(answer.text).toContain('https://indiankanoon.org/search/?formInput=section%20138%20negotiable%20instruments%20act');
-    expect(answer.text).toContain('No credits were charged');
+    // What it cost is said by the channel, which knows (web-fallback.ts); the
+    // provision is passed on for the web search.
+    expect(answer.text).not.toContain('credits');
+    expect(answer.provision).toBe('Section 138 of the Negotiable Instruments Act, 1881');
   });
 
   it('answers an old-code section from its own text as well as its new counterpart', async () => {

@@ -3,6 +3,8 @@ import { ChatMessageRow, PrecedentRow, UserRow } from '../database/types';
 import { CnrNotFoundError } from '../ecourts/ecourts.service';
 import searchResponse from '../ecourts/__fixtures__/ecourtsindia-search-idfc.json';
 import { mapSearchResponse } from '../ecourts/party-search';
+import webSearchResponse from '../ai/__fixtures__/openai-web-search-order39.json';
+import { parseWebAnswer } from '../ai/web-fallback';
 import { ChatEvent, ChatService } from './chat.service';
 
 /**
@@ -50,6 +52,7 @@ function build(
     allowed?: boolean;
     lookup?: jest.Mock;
     casesForQuestion?: jest.Mock;
+    webFind?: jest.Mock;
     corpusJudgments?: number;
   } = {},
 ) {
@@ -128,6 +131,7 @@ function build(
     }),
     peek: jest.fn().mockResolvedValue(balance),
     refund: jest.fn().mockResolvedValue(undefined),
+    chargeUnverified: jest.fn().mockResolvedValue(1),
   };
 
   const ecourts = {
@@ -139,6 +143,8 @@ function build(
     countCorpus: jest.fn().mockResolvedValue({ judgments: over.corpusJudgments ?? 100 }),
   };
   const registry = { isFullyMocked: false };
+  // The web finds nothing unless a test says otherwise (web-fallback.ts).
+  const web = { find: over.webFind ?? jest.fn().mockResolvedValue(null) };
 
   const service = new ChatService(
     chats as never,
@@ -150,9 +156,10 @@ function build(
     analytics as never,
     corpus as never,
     registry as never,
+    web as never,
   );
 
-  return { service, credits, ecourts, precedents, rag, chats, analytics };
+  return { service, credits, ecourts, precedents, rag, chats, analytics, web };
 }
 
 /** Drain the generator, which is how the controller consumes it. */
@@ -464,5 +471,80 @@ describe('the charge is keyed to the stored message', () => {
     expect(credits.spend).toHaveBeenCalledWith(
       expect.objectContaining({ reference: 'spend:web:msg-1' }),
     );
+  });
+});
+
+/**
+ * Unverified information from the web (web-fallback.ts) - when every verified
+ * source came up empty. The found text is OpenAI's real web_search answer for
+ * "Order 39 Rule 1 CPC", captured on the production server.
+ */
+describe('when no verified source has the answer', () => {
+  const found = parseWebAnswer(webSearchResponse)!;
+
+  it('shows a provision the web has, apart and unverified, for one credit', async () => {
+    const webFind = jest.fn().mockResolvedValue(found);
+    const { service, credits, rag, chats } = build({ intent: 'SECTION_LOOKUP', webFind });
+    rag.answer.mockResolvedValueOnce({
+      text: "I don't have the official text of *Order 39 Rule 1 of the Civil Procedure Code (CPC)* in Ley Legal yet.",
+      citations: [], passages: [], statutes: [], model: 'rule:no-official-text', inputTokens: 0, outputTokens: 0,
+      latencyMs: 1, guardrailTriggered: false, guardrailReason: null, mocked: false, unavailable: true,
+      provision: 'Order 39 Rule 1 of the Civil Procedure Code (CPC)',
+    });
+
+    const events = await ask(service, 'Order 39 Rule 1 CPC');
+
+    expect(webFind).toHaveBeenCalledWith('provision', 'Order 39 Rule 1 CPC', 'Order 39 Rule 1 of the Civil Procedure Code (CPC)');
+    expect(credits.chargeUnverified).toHaveBeenCalledWith('user-1', 'GUEST_LAWYER', expect.stringMatching(/^spend:web:/));
+    expect(credits.refund).not.toHaveBeenCalled();
+    expect(answers(events)).toMatch(/1 credit was charged for the unverified information below\.$/);
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.charged).toBe(1);
+    expect((answer?.message.structured as { unverified: unknown }).unverified).toEqual(found);
+    expect(events.some((e) => e.type === 'stage' && e.stage === 'searching-web')).toBe(true);
+    const stored = chats.appendMessage.mock.calls.map((c) => c[0]).find((m) => m.role === 'assistant');
+    expect(stored?.creditsCharged).toBe(1);
+  });
+
+  it('is refunded as before when the web has nothing either', async () => {
+    const { service, credits, rag } = build({ intent: 'SECTION_LOOKUP' });
+    rag.answer.mockResolvedValueOnce({
+      text: "I don't have the official text of *Order 39 Rule 1 of the Civil Procedure Code (CPC)* in Ley Legal yet.",
+      citations: [], passages: [], statutes: [], model: 'rule:no-official-text', inputTokens: 0, outputTokens: 0,
+      latencyMs: 1, guardrailTriggered: false, guardrailReason: null, mocked: false, unavailable: true,
+    });
+
+    const events = await ask(service, 'Order 39 Rule 1 CPC');
+
+    expect(credits.refund).toHaveBeenCalled();
+    expect(credits.chargeUnverified).not.toHaveBeenCalled();
+    expect(answers(events)).toMatch(/No credits were charged for this question\.$/);
+  });
+
+  it('searches the web for a judgment neither Kanoon nor eCourts has', async () => {
+    const webFind = jest.fn().mockResolvedValue(found);
+    const { service, credits } = build({ intent: 'PRECEDENT_SEARCH', precedents: [], webFind });
+
+    const events = await ask(service, 'judgments on temporary injunction under order 39');
+
+    expect(webFind).toHaveBeenCalledWith('judgment', 'judgments on temporary injunction under order 39', 'q');
+    expect(credits.refund).not.toHaveBeenCalled();
+    expect(answers(events)).toBe('No judgments matched "q" in Ley Legal\'s sources. 1 credit was charged for the unverified information below.');
+  });
+
+  it('searches the web for a CNR eCourts has no record of, for the credit already taken', async () => {
+    const webFind = jest.fn().mockResolvedValue(found);
+    const { service, credits } = build({
+      intent: 'CASE_STATUS',
+      cnr: 'DLCT010012342024',
+      lookup: jest.fn().mockRejectedValue(new CnrNotFoundError('DLCT010012342024')),
+      webFind,
+    });
+
+    const events = await ask(service, 'status of DLCT010012342024');
+
+    expect(webFind).toHaveBeenCalledWith('cnr', 'status of DLCT010012342024', 'DLCT010012342024');
+    expect(credits.refund).not.toHaveBeenCalled();
+    expect(answers(events)).toBe('eCourts has no record of CNR DLCT010012342024.\n\n1 credit was charged for the unverified information below.');
   });
 });

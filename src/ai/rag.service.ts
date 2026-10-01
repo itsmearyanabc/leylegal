@@ -52,6 +52,8 @@ export interface RagAnswer {
    * memory. Nothing was delivered, so the channel refunds the charge.
    */
   unavailable?: boolean;
+  /** With `unavailable`: the provision asked about, as the reply names it - "Section 2 of the Companies Act, 2013". */
+  provision?: string;
 }
 
 /**
@@ -376,8 +378,9 @@ function unavailableAnswer(intent: ClassifiedIntent, target: ProvisionTarget | n
   const text = [
     `I don't have the official text of *${provision}* in Ley Legal yet, so I won't describe it from memory - a wrong section number or wording would cost you more than no answer.`,
     `You can read it on Indian Kanoon: ${link}`,
-    'No credits were charged for this question.',
   ].join('\n\n');
-  return fixedAnswer(text, 'rule:no-official-text', started, true);
+  // What it cost is said by the channel, which knows: nothing, or one credit
+  // for unverified information found on the web (web-fallback.ts).
+  return { ...fixedAnswer(text, 'rule:no-official-text', started, true), provision };
 }
 

@@ -804,6 +804,7 @@ const STAGE_LABELS = {
   classifying: 'Understanding the question',
   'looking-up': 'Looking up the court record',
   searching: 'Searching judgments',
+  'searching-web': 'Searching the internet',
   retrieving: 'Searching the corpus',
   generating: 'Writing the answer',
   verifying: 'Verifying every citation',
@@ -1237,6 +1238,12 @@ function renderMessage(message) {
     body.appendChild(caveatNote());
   }
 
+  // Found on the web when every verified source was empty: after the answer,
+  // apart from it, and marked unverified (web-fallback.ts).
+  if (structured && structured.unverified) {
+    body.appendChild(renderUnverified(structured.unverified));
+  }
+
   if (message.role === 'assistant' && !message.error) {
     body.appendChild(messageMeta(message));
   }
@@ -1494,6 +1501,45 @@ function renderCaseMatches(cases) {
   }
 
   return wrap;
+}
+
+/**
+ * Unverified information from the web, in its own yellow section.
+ *
+ * The text keeps its inline citations - [title](url) - as links, as OpenAI
+ * requires for web search results; the sources follow as a numbered list, and
+ * the note says what this is. Escaped first, then linked, and only for http(s)
+ * addresses.
+ */
+function renderUnverified(info) {
+  const box = el('div', 'unverified');
+  box.appendChild(el('div', 'unverified-head', 'Unverified information - found on the internet'));
+
+  const text = el('div', 'unverified-text');
+  text.innerHTML = esc(info.text || '')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer nofollow">$1</a>')
+    .replace(/\n/g, '<br>');
+  box.appendChild(text);
+
+  const sources = (info.sources || []).filter((s) => /^https?:\/\//i.test(s.url || ''));
+  if (sources.length) {
+    const list = el('ol', 'unverified-sources');
+    for (const source of sources) {
+      const item = el('li');
+      const link = el('a', null, source.title || source.url);
+      link.href = source.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer nofollow';
+      item.appendChild(link);
+      list.appendChild(item);
+    }
+    box.appendChild(list);
+  }
+
+  box.appendChild(el('div', 'unverified-note', info.note || ''));
+  return box;
 }
 
 /** The required closing line. Italic, and worded identically on both channels. */

@@ -1,4 +1,6 @@
 import { CREDIT_COST } from '../credits/credits.service';
+import webSearchResponse from '../ai/__fixtures__/openai-web-search-order39.json';
+import { parseWebAnswer } from '../ai/web-fallback';
 import { PrecedentRow, WhatsAppUserRow } from '../database/types';
 import { CnrNotFoundError } from '../ecourts/ecourts.service';
 import { CircuitOpenError } from '../common/circuit-breaker';
@@ -97,6 +99,7 @@ function build(
     conversations?: ReturnType<typeof conversationStore>;
     lookup?: jest.Mock;
     casesForQuestion?: jest.Mock;
+    webFind?: jest.Mock;
     allowed?: boolean;
     deliverable?: boolean;
     answerText?: string;
@@ -171,12 +174,15 @@ function build(
       balance,
     }),
     refund: jest.fn().mockResolvedValue(undefined),
+    chargeUnverified: jest.fn().mockResolvedValue(1),
   };
   const phoneLink = { redeemCode: jest.fn().mockResolvedValue({ status: 'NO_PENDING_CODE' }) };
   const analytics = { recordSearch: jest.fn().mockResolvedValue(undefined), searchesToday: jest.fn() };
   const transcription = { isAvailable: false, transcribe: jest.fn() };
   const registry = { isFullyMocked: false };
   const env = { SESSION_TTL_SECONDS: 1800, APP_PUBLIC_URL: '' };
+  // The web finds nothing unless a test says otherwise (web-fallback.ts).
+  const web = { find: over.webFind ?? jest.fn().mockResolvedValue(null) };
 
   const service = new ConversationService(
     api as never,
@@ -193,9 +199,10 @@ function build(
     transcription as never,
     registry as never,
     env as never,
+    web as never,
   );
 
-  return { service, api, users, conversations, precedents, ecourts, credits, rag, analytics, memory };
+  return { service, api, users, conversations, precedents, ecourts, credits, rag, analytics, memory, web };
 }
 
 function sent(api: { sendText: jest.Mock }): string {
@@ -687,5 +694,54 @@ describe('a credit that bought nothing comes back', () => {
     await service.handle(job({ text: 'case law on bail' }));
 
     expect(credits.refund).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Unverified information from the web (web-fallback.ts), on WhatsApp as on the
+ * website. The found text is OpenAI's real web_search answer for "Order 39
+ * Rule 1 CPC", captured on the production server.
+ */
+describe('when no verified source has the answer', () => {
+  const found = parseWebAnswer(webSearchResponse)!;
+
+  it('sends what the web has after the reply, marked unverified, for one credit', async () => {
+    const webFind = jest.fn().mockResolvedValue(found);
+    const { service, api, credits, rag } = build({ intent: 'SECTION_LOOKUP', conversations: atMenu(), webFind });
+    rag.answer.mockResolvedValueOnce({
+      text: "I don't have the official text of *Order 39 Rule 1 of the Civil Procedure Code (CPC)* in Ley Legal yet.",
+      citations: [], passages: [], statutes: [], model: 'rule:no-official-text', inputTokens: 0, outputTokens: 0,
+      latencyMs: 1, guardrailTriggered: false, guardrailReason: null, mocked: false, unavailable: true,
+      provision: 'Order 39 Rule 1 of the Civil Procedure Code (CPC)',
+    });
+
+    await service.handle(job({ text: 'Order 39 Rule 1 CPC' }));
+
+    expect(webFind).toHaveBeenCalledWith('provision', 'Order 39 Rule 1 CPC', 'Order 39 Rule 1 of the Civil Procedure Code (CPC)');
+    expect(credits.chargeUnverified).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'spend:wa:wamid.1');
+    expect(credits.refund).not.toHaveBeenCalled();
+    const text = sent(api);
+    expect(text).toContain('1 credit was charged for the unverified information below.');
+    expect(text).toContain('⚠️ *Unverified information - found on the internet*');
+    // WhatsApp shows a bare URL as a link, not markdown.
+    expect(text).toContain('indiacode.ecourtsindia.com (https://indiacode.ecourtsindia.com/cpc/order/xxxix/rule/1/?utm_source=openai)');
+    expect(text).toContain('1. CPC Order 39 Rule 1: Cases in which temporary injunction may be granted | IndiaCode - https://indiacode.ecourtsindia.com/cpc/order/xxxix/rule/1/?utm_source=openai');
+    expect(text).toContain("_This information is not verified against Ley Legal's database.");
+    expect(text.indexOf('Unverified information')).toBeLessThan(text.indexOf('Not legal advice'));
+  });
+
+  it('refunds as before when the web has nothing either', async () => {
+    const { service, api, credits, rag } = build({ intent: 'SECTION_LOOKUP', conversations: atMenu() });
+    rag.answer.mockResolvedValueOnce({
+      text: "I don't have the official text of *Order 39 Rule 1 of the Civil Procedure Code (CPC)* in Ley Legal yet.",
+      citations: [], passages: [], statutes: [], model: 'rule:no-official-text', inputTokens: 0, outputTokens: 0,
+      latencyMs: 1, guardrailTriggered: false, guardrailReason: null, mocked: false, unavailable: true,
+    });
+
+    await service.handle(job({ text: 'Order 39 Rule 1 CPC' }));
+
+    expect(credits.refund).toHaveBeenCalled();
+    expect(sent(api)).toContain('No credits were charged for this question.');
+    expect(sent(api)).not.toContain('Unverified information');
   });
 });
