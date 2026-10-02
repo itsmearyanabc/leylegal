@@ -153,9 +153,11 @@ export type TemplateComponent =
    */
   | {
       type: 'button';
-      sub_type: 'url' | 'copy_code';
+      // An authentication template's copy-code button: "url", with the code as
+      // text - not "copy_code"/coupon_code, which is a marketing template's.
+      sub_type: 'url';
       index: string;
-      parameters: { type: 'text' | 'coupon_code'; text?: string; coupon_code?: string }[];
+      parameters: { type: 'text'; text: string }[];
     };
 
 export type OutboundMessage =

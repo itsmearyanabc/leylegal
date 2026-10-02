@@ -156,6 +156,15 @@ export class WhatsAppApiService {
    * message whose button copies an empty string - a failure that looks like a
    * working send in every log and only shows up on the handset.
    *
+   * ## Why the button is sub_type "url"
+   *
+   * An authentication template's copy-code button is sent as sub_type "url"
+   * with the code as a text parameter (Meta's "Copy code authentication
+   * templates", updated 24 June 2026). This sent sub_type "copy_code" with a
+   * coupon_code - the shape of a marketing template's "copy offer code"
+   * button - so every sign-up and password-reset code would have been refused
+   * the moment WhatsApp was switched on.
+   *
    * Deliberately not routed through `sendText`'s splitting: a code is never
    * long enough to split, and a split code would be two useless messages.
    */
@@ -175,9 +184,9 @@ export class WhatsAppApiService {
           { type: 'body', parameters: [{ type: 'text', text: code }] },
           {
             type: 'button',
-            sub_type: 'copy_code',
+            sub_type: 'url',
             index: '0',
-            parameters: [{ type: 'coupon_code', coupon_code: code }],
+            parameters: [{ type: 'text', text: code }],
           },
         ],
       },
