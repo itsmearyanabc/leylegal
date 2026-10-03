@@ -20,7 +20,7 @@ function row(section_number: string, section_title: string, match_type: StatuteR
 function service(found: StatuteRow[], fetcherOver: Partial<Record<'stored' | 'fetch' | 'replaceAbridged', jest.Mock>> = {}) {
   const registry = { complete: jest.fn().mockResolvedValue({ text: 'answer', model: 'm', inputTokens: 1, outputTokens: 1 }) };
   const guardrails = { verify: jest.fn(async (text: string) => ({ text, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null })) };
-  const corpus = { searchStatutes: jest.fn().mockResolvedValue(found) };
+  const corpus = { searchStatutes: jest.fn().mockResolvedValue(found), withCorrespondence: jest.fn(async (rows: StatuteRow[]) => rows) };
   const statutes = {
     stored: fetcherOver.stored ?? jest.fn().mockResolvedValue(null),
     fetch: fetcherOver.fetch ?? jest.fn().mockResolvedValue({ row: null, outcome: 'not-found' }),
@@ -51,13 +51,17 @@ describe('the statutes a section answer is written from', () => {
     expect(system).not.toContain('Examination of person accused of rape');
   });
 
-  it('still uses what it found when the named section itself was not among it', async () => {
+  it('answers a named section from itself, never from what merely looks like it', async () => {
+    // "Section 377 IPC ka BNS mein equivalent" was answered from IPC 379 and
+    // 376, the nearest numbers, as "IPC 377 = BNS 66". A named section the
+    // corpus does not hold, and that cannot be fetched, is "not available".
     const { rag, registry } = service([row('144', 'Order for maintenance of wives, children and parents', 'FULLTEXT')]);
 
-    // 300 is inside the BNSS's 531 sections, so this reaches the search (999
-    // would be answered as nonexistent before any search or model call).
-    await rag.answer(intent('300'));
-    expect(registry.complete.mock.calls[0][0].system).toContain('BNSS Section 144');
+    // 300 is inside the BNSS's 531 sections, so this reaches the search.
+    const answer = await rag.answer(intent('300'));
+
+    expect(registry.complete).not.toHaveBeenCalled();
+    expect(answer.unavailable).toBe(true);
   });
 
   it('uses everything found for a question that names no section', async () => {

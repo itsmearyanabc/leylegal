@@ -88,7 +88,23 @@ const yearOf = (name: string) => /\b(1[6-9]\d\d|20\d\d)\b/.exec(name.replace(/\(
 
 /** "Section 138 in The Negotiable Instruments Act, 1881" -> parts, or null. */
 export function parseLawTitle(title: string): { word: 'Section' | 'Article'; number: string; act: string } | null {
-  const m = /^\s*(Section|Article)\s+([0-9]+[A-Z]*)\s+in\s+(.+?)\s*$/i.exec(title);
+  /*
+   * Plain text first. The API highlights the words searched for:
+   * "<b>Section</b> <b>377</b> in The <b>Indian</b> <b>Penal</b> <b>Code</b>, 1860"
+   * (from production's own log). Read with the tags in, no title ever matched,
+   * and every provision of every Act was reported "not available" - the
+   * website's copy of the same title, which the fixtures were built from, has
+   * no tags.
+   */
+  const plain = title
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+  const m = /^\s*(Section|Article)\s+([0-9]+[A-Z]*)\s+in\s+(.+?)\s*$/i.exec(plain);
   if (!m) return null;
   return { word: (m[1][0].toUpperCase() + m[1].slice(1).toLowerCase()) as 'Section' | 'Article', number: m[2].toUpperCase(), act: m[3] };
 }
@@ -223,7 +239,9 @@ export class StatuteFetcher {
   > {
     if (!this.kanoon.isConfigured) return { ok: false, outcome: 'unavailable', detail: { why: 'Kanoon not configured' } };
 
-    const missKey = `law-miss:${createHash('sha256').update(lawQuery(target)).digest('hex').slice(0, 32)}`;
+    // v2: the misses recorded before parseLawTitle read highlighted titles are
+    // not misses - Kanoon had every one of them - so they are left behind.
+    const missKey = `law-miss:v2:${createHash('sha256').update(lawQuery(target)).digest('hex').slice(0, 32)}`;
     if (await this.cache.get<boolean>(missKey).catch(() => null)) {
       return { ok: false, outcome: 'not-found', detail: { from: 'miss cache' } };
     }

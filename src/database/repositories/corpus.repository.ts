@@ -212,11 +212,19 @@ export class CorpusRepository {
         ${limit}
       )
     `;
-    if (rows.length === 0) return rows;
+    return this.withCorrespondence(rows);
+  }
 
-    // The official old/new correspondence for every section found, on whichever
-    // side of the recodification the row sits - and where each row's text came
-    // from, which is what tells an enacted text from 0006's abridged seed.
+  /**
+   * The official old/new correspondence for each section, on whichever side of
+   * the recodification it sits - and where its text came from, which is what
+   * tells an enacted text from 0006's abridged seed.
+   *
+   * Public because a provision fetched from Kanoon needs it too: without it an
+   * IPC section reads as having no BNS counterpart, which is a claim, not a gap.
+   */
+  async withCorrespondence(rows: StatuteRow[]): Promise<StatuteRow[]> {
+    if (rows.length === 0) return rows;
     const acts = rows.map((r) => r.act_code.toUpperCase());
     const bases = rows.map((r) => r.section_number.split('(')[0].toUpperCase());
     const ids = rows.map((r) => r.id);

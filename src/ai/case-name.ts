@@ -141,28 +141,39 @@ const SEPARATOR = /\s+(?:vs?\.?|versus)\s+/i;
 export function extractCaseName(text: string): CaseName | null {
   if (!text) return null;
 
-  // Trailing court and date qualifiers - "... . Patna High court", "... (2017)"
-  // - are context for the search, not part of the name.
   const withoutLeadIn = withoutSummaryRequest(text.trim())
     .trim()
     .replace(LEAD_IN, '')
     .replace(/[.,;]?\s*\(?\b(19|20)\d{2}\)?\s*$/, '');
 
-  const courtMatch = TRAILING_COURT.exec(withoutLeadIn);
-  const trimmed = withoutLeadIn
-    .replace(TRAILING_COURT, '')
-    .replace(TRAILING_DATE, '')
-    // Again, for "X vs Y summary (2017)", where the year was behind the
-    // summary word the first pass looked for.
-    .replace(SUMMARY_TAIL, '')
-    .trim();
-
-  const parts = trimmed.split(SEPARATOR);
+  const parts = withoutLeadIn.split(SEPARATOR);
   if (parts.length !== 2) return null;
 
-  const petitioner = tidyParty(parts[0]);
-  const respondent = tidyParty(parts[1]);
+  /*
+   * Trailing court, date and request words - "... . Patna High court", "...
+   * (2017)", "... still good law?" - are looked for after the separator only.
+   *
+   * Searched across the whole question, a court named *before* the parties -
+   * "Summarise the Supreme Court judgment in Ritu Malhotra v. Bar Council of
+   * Bihar" - matched and took everything after it, the parties included, so
+   * no case name was found at all. A leading space keeps "X vs Delhi High
+   * Court" a court through and through, as before.
+   */
+  const tail = ` ${parts[1]}`;
+  const courtMatch = TRAILING_COURT.exec(tail);
+  const respondentText = trimRequestTail(
+    tail
+      .replace(TRAILING_COURT, '')
+      .replace(TRAILING_DATE, '')
+      // Again, for "X vs Y summary (2017)", where the year was behind the
+      // summary word the first pass looked for.
+      .replace(SUMMARY_TAIL, ''),
+  );
+
+  const petitioner = tidyParty(trimRequestHead(parts[0]));
+  const respondent = tidyParty(respondentText);
   if (!petitioner || !respondent) return null;
+  const headCourt = HEAD_COURT.exec(parts[0]);
 
   // A separator with a whole sentence on one side is not a cause title. "Is
   // bail granted when the accused vs the complainant have settled" is a
@@ -170,8 +181,69 @@ export function extractCaseName(text: string): CaseName | null {
   // answering it as a topic.
   if (words(petitioner).length > 8 || words(respondent).length > 8) return null;
 
-  const court = courtMatch ? courtMatch[0].replace(/^[\s.,;]+/, '').trim() : undefined;
+  const court = courtMatch
+    ? courtMatch[0].replace(/^[\s.,;]+/, '').trim()
+    : headCourt
+      ? headCourt[0].trim()
+      : undefined;
   return court ? { petitioner, respondent, court } : { petitioner, respondent };
+}
+
+/**
+ * The words of a request, which run into the petitioner's name.
+ *
+ * "Give the full SCC citation of Arnesh Kumar v. State of Bihar" read the
+ * petitioner as "Give the full SCC citation of Arnesh Kumar", which no title
+ * matches - so the most cited arrest judgment in the country came back as not
+ * found, and four unrelated ones were listed in its place.
+ */
+const REQUEST_WORDS = new Set([
+  'give', 'tell', 'show', 'share', 'send', 'provide', 'explain', 'find', 'get', 'me', 'us', 'the', 'a', 'an',
+  'full', 'complete', 'summary', 'summarise', 'summarize', 'citation', 'cite', 'scc', 'air', 'holding', 'ratio',
+  'judgment', 'judgement', 'decision', 'case', 'order', 'status', 'details', 'detail', 'facts', 'supreme', 'high',
+  'court', 'apex', 'please', 'kindly', 'what', 'whats', 'is', 'was', 'latest', 'leading', 'landmark', 'key',
+  'its', 'of', 'in', 'on', 'about', 'for', 'regarding', 're',
+]);
+
+/** A court named before the parties - "the Supreme Court judgment in X v. Y". */
+const HEAD_COURT = /\b(?:supreme|apex|high|district|sessions)\s+court\b|\btribunal\b/i;
+
+/**
+ * The petitioner without the request in front of it.
+ *
+ * Cut at the last "of / in / on / about / for / regarding" before which every
+ * word is a request word - "Give the full SCC citation of" - and never where a
+ * name word comes first: "State of Bihar" keeps its "of". Then a leading
+ * question word: "Is ADM Jabalpur" is ADM Jabalpur.
+ */
+function trimRequestHead(head: string): string {
+  let out = head.trim();
+  for (const match of out.matchAll(/\b(?:of|in|on|about|for|regarding)\s+/gi)) {
+    const before = out.slice(0, match.index).trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (before.length > 0 && before.every((word) => REQUEST_WORDS.has(word.replace(/[^a-z']/g, '')))) {
+      out = out.slice((match.index ?? 0) + match[0].length);
+      return trimRequestHead(out);
+    }
+  }
+  return out.replace(/^(?:(?:is|was|were|whether|does|did|has|had|what|which|please|kindly|the)\s+)+/i, '');
+}
+
+/**
+ * The respondent without the request behind it - "... and its key holding",
+ * "... still good law?", "... judgment ka ratio kya hai?" - or a citation:
+ * "Ramesh Kumar Yadav, (2021) 4 SCC 999" is Ramesh Kumar Yadav.
+ */
+function trimRequestTail(tail: string): string {
+  return tail
+    .replace(/[,;]?\s*(?:\(\d{4}\)|\[\d{4}\]|\d{4})\s+\d+\s+[A-Z][A-Za-z.]*\s+\d+.*$/, '')
+    .replace(/[,;]?\s*AIR\s+\d{4}\s+[A-Z][A-Za-z.]*\s+\d+.*$/i, '')
+    .replace(/[,;]?\s*\d{4}\s+INSC\s+\d+.*$/i, '')
+    .replace(
+      /\s+(?:and\s+(?:its|the|his|her|their)\b|still\b|judg(?:e)?ments?\b|ka\b|ki\b|ke\b|ratio\b|kya\b|holding\b|good\s+law\b|case\s+law\b|decided\b|summary\b|citation\b|on\s+(?:the\s+)?(?:question|issue|point)\b).*$/i,
+      '',
+    )
+    .replace(/[?!]+\s*$/, '')
+    .trim();
 }
 
 /**

@@ -7,7 +7,7 @@ import { RetrievedChunk, StatuteRow } from '../database/types';
 import { EmbeddingService } from './embedding.service';
 import { GuardrailsService } from './guardrails.service';
 import { ClassifiedIntent } from './intent.service';
-import { expandQuery } from './legal-patterns';
+import { NEW_CRIMINAL_CODES, expandQuery, topicQuery } from './legal-patterns';
 import {
   buildGeneralLegalPrompt,
   buildPrecedentSearchPrompt,
@@ -116,7 +116,9 @@ export class RagService {
 
     // The Constitution's rows are keyed "21", not "Article 21".
     const searchNumber = intent.actCode === 'COI' && target ? target.number : intent.sectionNumber;
-    const found = await this.corpus.searchStatutes(intent.searchQuery, searchNumber, intent.actCode, 3);
+    const found = intent.sectionNumber
+      ? await this.corpus.searchStatutes(intent.searchQuery, searchNumber, intent.actCode, 3)
+      : await this.onSubject(intent);
 
     // When the named provision itself was found, the model gets that provision,
     // its sub-sections and its official counterparts - not its neighbours by
@@ -124,7 +126,15 @@ export class RagService {
     // number similarity (examination of a person accused of rape), which can
     // only distract an answer about trials before High Courts.
     const named = intent.sectionNumber ? found.filter((s) => s.match_type === 'EXACT' || s.match_type === 'RECODIFIED') : [];
-    let statutes = named.length > 0 ? named : found;
+    /*
+     * A named section is answered from itself and its official counterparts,
+     * or not at all - never from sections that merely look like it. "Section
+     * 377 IPC ka BNS mein equivalent" fell back to IPC 379 and IPC 376, the
+     * nearest numbers, and the model wrote "IPC 377 = BNS 66" from them: BNS 66
+     * is death caused in the course of rape, and IPC 377 has no BNS
+     * counterpart at all.
+     */
+    let statutes = intent.sectionNumber ? named : found;
 
     /*
      * The provision asked about, in its own enacted words. "IPC 415" was
@@ -135,7 +145,11 @@ export class RagService {
       const whole = statutes.find((s) => s.act_code.toUpperCase() === intent.actCode && s.section_number.toUpperCase() === target.number);
       if (!whole) {
         const fetched = (await this.statutes.fetch(target)).row;
-        if (fetched) statutes = [fetched, ...statutes.filter((s) => s.id !== fetched.id)];
+        if (fetched) {
+          // With its official counterparts, so "none listed" can be told from "not looked up".
+          const [official] = await this.corpus.withCorrespondence([fetched]);
+          statutes = [official ?? fetched, ...statutes.filter((s) => s.id !== fetched.id)];
+        }
       } else if (whole.source_url === null) {
         const replaced = await this.statutes.replaceAbridged(whole, target);
         if (replaced) statutes = statutes.map((s) => (s.id === whole.id ? replaced : s));
@@ -149,13 +163,37 @@ export class RagService {
        * is how "Section 520 BNSS" became disposal of property pending appeal.
        * A named provision is now answered from its text or not at all.
        */
-      if (describeProvision(intent)) return unavailableAnswer(intent, target, started);
+      if (describeProvision(intent)) {
+        // An old-code section with no counterpart in the official table: that
+        // much is known from the table, text or no text.
+        const noCounterpart =
+          !!intent.actCode && intent.actCode in NEW_CODE_FOR && !found.some((s) => s.match_type === 'RECODIFIED');
+        return unavailableAnswer(intent, target, started, noCounterpart);
+      }
 
       // No provision named either - a general legal question, answered as one.
       return this.answerGeneral(intent, started, history, onStage);
     }
 
     return this.explain(statutes, intent, started, history, onStage);
+  }
+
+  /**
+   * The provisions on the subject of a question that names no section: "what
+   * is the BNS section for organised crime", "bail ke liye kaunsi section".
+   *
+   * Searched by the words the provision would contain (topicQuery), in all
+   * three new criminal codes when any of the six was named, and only the
+   * provisions close to the best match are kept - a section that mentions bail
+   * once is not an answer about bail.
+   */
+  private async onSubject(intent: ClassifiedIntent): Promise<StatuteRow[]> {
+    const query = topicQuery(intent.searchQuery) || topicQuery(intent.rawText);
+    if (!query) return [];
+    const criminal = intent.actCode !== null && (intent.actCode in NEW_CODE_FOR || NEW_CRIMINAL_CODES.includes(intent.actCode));
+    const acts: (string | null)[] = criminal ? [...new Set([...NEW_CRIMINAL_CODES, intent.actCode])] : [intent.actCode];
+    const rows = (await Promise.all(acts.map((act) => this.corpus.searchStatutes(query, null, act, 4)))).flat();
+    return closestToBest(rows);
   }
 
   private explain(
@@ -365,12 +403,27 @@ function fixedAnswer(text: string, model: string, started: number, unavailable =
   };
 }
 
+/** The code that replaced each old one, for saying that a section has no counterpart in it. */
+const NEW_CODE_FOR: Record<string, string> = { IPC: 'BNS', CRPC: 'BNSS', IEA: 'BSA' };
+
+/**
+ * The best full-text matches on a subject: within 30% of the top score, four
+ * at most. Measured on the Gazette text: "bail" ranks BNSS 480 at 54 and BNS
+ * 269 (failing to appear on a bail bond) at 18; "organised crime" ranks BNS 111
+ * at 60, BNS 112 at 18 and BNSS 43 (arrest how made) at 4.
+ */
+export function closestToBest(rows: StatuteRow[]): StatuteRow[] {
+  const unique = [...new Map(rows.map((r) => [r.id, r])).values()].sort((a, b) => b.score - a.score);
+  const best = unique[0]?.score ?? 0;
+  return unique.filter((r) => r.score >= best * 0.3).slice(0, 4);
+}
+
 /**
  * The reply when a named provision has no official text here. Says so, points
  * to where it can be read, and does not describe it: a wrong number or wording
  * costs an advocate more than no answer. The charge is refunded upstream.
  */
-function unavailableAnswer(intent: ClassifiedIntent, target: ProvisionTarget | null, started: number): RagAnswer {
+function unavailableAnswer(intent: ClassifiedIntent, target: ProvisionTarget | null, started: number, noCounterpart = false): RagAnswer {
   const provision = describeProvision(intent) ?? 'that provision';
   const link = target
     ? kanoonSearchLink(target)
@@ -378,7 +431,12 @@ function unavailableAnswer(intent: ClassifiedIntent, target: ProvisionTarget | n
   const text = [
     `I don't have the official text of *${provision}* in Ley Legal yet, so I won't describe it from memory - a wrong section number or wording would cost you more than no answer.`,
     `You can read it on Indian Kanoon: ${link}`,
-  ].join('\n\n');
+    noCounterpart && intent.actCode
+      ? `The official 2023 correspondence table lists no ${NEW_CODE_FOR[intent.actCode]} section for it: it was not carried into the ${NEW_CODE_FOR[intent.actCode]}.`
+      : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
   // What it cost is said by the channel, which knows: nothing, or one credit
   // for unverified information found on the web (web-fallback.ts).
   return { ...fixedAnswer(text, 'rule:no-official-text', started, true), provision };

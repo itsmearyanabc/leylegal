@@ -145,6 +145,29 @@ describe('spotting that a judgment was named', () => {
     });
   });
 
+  /*
+   * Questions from the audit of 2 October. Each named a judgment - real or
+   * invented - and the request around the names reached Indian Kanoon as part
+   * of a party: "Is ADM Jabalpur" found nothing, and "Mankind judgment ka
+   * ratio kya hai" found ten judgments about something else, shown as if
+   * they answered the question.
+   */
+  it.each([
+    ['Is ADM Jabalpur v. Shivkant Shukla still good law?', 'ADM Jabalpur', 'Shivkant Shukla'],
+    ['Mercy v. Mankind judgment ka ratio kya hai?', 'Mercy', 'Mankind'],
+    ['Summarise State of Bihar v. Ramesh Kumar Yadav, (2021) 4 SCC 999', 'State of Bihar', 'Ramesh Kumar Yadav'],
+    ['Is Prakash v. Phulavati still good law on daughters coparcenary rights?', 'Prakash', 'Phulavati'],
+    ['What is the ratio of Arnesh Kumar v. State of Bihar and its guidelines on arrest?', 'Arnesh Kumar', 'State of Bihar'],
+  ])('reads the parties out of %p', (text, petitioner, respondent) => {
+    expect(extractCaseName(text)).toEqual({ petitioner, respondent });
+  });
+
+  it('keeps a court named before the parties, and drops the citation after them', () => {
+    expect(
+      extractCaseName('Summarise the Supreme Court judgment in Ritu Malhotra v. Bar Council of Bihar, (2023) 9 SCC 1088'),
+    ).toEqual({ petitioner: 'Ritu Malhotra', respondent: 'Bar Council of Bihar', court: 'Supreme Court' });
+  });
+
   it('keeps the court behind a request for a summary', () => {
     expect(
       extractCaseName('summary of Rajesh Kumar Mittal vs State of Bihar in Patna High Court in 100 words'),

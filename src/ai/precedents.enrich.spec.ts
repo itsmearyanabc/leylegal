@@ -355,14 +355,29 @@ describe('the documented search operators, and falling back from them', () => {
     ).rejects.toThrow('indian kanoon is down');
   });
 
-  it('returns the narrowest results as near misses when nothing answers', async () => {
+  it('says the named case was not found, and lists nothing in its place', async () => {
+    // The near misses used to come back as the answer, and the website showed
+    // "3 authorities on the ratio of Mercy v. Mankind" - a case that does not
+    // exist - under the name that was asked for.
     const { service, kanoon } = build();
     kanoon.search.mockResolvedValue([stranger]);
 
     const result = await service.search(named('Rajesh Kumar Mittal vs State of Bihar') as never);
 
     expect(result.namedCase).toEqual({ name: 'Rajesh Kumar Mittal vs State of Bihar', found: false });
-    expect(result.precedents[0].case_title).toContain('Atc Telecom');
+    expect(result.precedents).toEqual([]);
+  });
+
+  it('finds a judgment asked for by citation only when a result carries that citation', async () => {
+    // "What did the Supreme Court hold in (2020) 7 SCC 1?" was answered with
+    // ten unrelated judgments: any result was taken as the answer.
+    const { service, kanoon } = build();
+    kanoon.search.mockResolvedValue([stranger]);
+
+    const result = await service.search(named('What did the Supreme Court hold in (2020) 7 SCC 1?') as never);
+
+    expect(result.namedCase).toEqual({ name: '(2020) 7 SCC 1', found: false });
+    expect(result.precedents).toEqual([]);
   });
 
   it('uses cite: for a pasted citation', async () => {

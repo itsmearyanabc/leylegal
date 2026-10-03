@@ -182,8 +182,11 @@ export function recodifiedReference(text: string): { act: ActCode; section: stri
   for (const m of text.matchAll(new RegExp(`\\b(${SECTION_NUMBER.source})(?![\\w(])`, 'gi'))) {
     const start = m.index!;
     const end = start + m[0].length;
-    const before = codes.find((c) => /^\s*(?:section|sec|s)?\.?\s*$/i.test(text.slice(c.end, start)));
-    const after = codes.find((c) => /^\s+(?:of\s+(?:the\s+)?)?$/i.test(text.slice(end, c.start)));
+    // Each side checks the code is on that side: a slice whose end comes before
+    // its start is "", which reads as no gap at all - and "2023 mein 420 IPC"
+    // gave the IPC section 2023, from any code named later in the question.
+    const before = codes.find((c) => c.end <= start && /^\s*(?:section|sec|s)?\.?\s*$/i.test(text.slice(c.end, start)));
+    const after = codes.find((c) => c.start >= end && /^\s+(?:of\s+(?:the\s+)?)?$/i.test(text.slice(end, c.start)));
     const owner = before ?? after;
     if (owner && !numbered.has(owner.act)) {
       numbered.set(owner.act, m[1].replace(/\s+/g, '').toUpperCase());
@@ -444,4 +447,67 @@ export function expandQuery(query: string, maxExtraTerms = 6): string {
   }
 
   return additions.length > 0 ? `${query} ${additions.join(' ')}` : query;
+}
+
+/**
+ * The criminal codes a question about a subject is looked up in: the three
+ * 2023 codes, whichever of the six it named.
+ *
+ * Advocates say "BNS" for the new criminal law as a whole. "जमानत के लिए कौन
+ * सी section? BNS में" searched the BNS alone for bail, found only BNS 269
+ * (failing to appear on a bail bond) - bail is BNSS 478 to 483.
+ */
+export const NEW_CRIMINAL_CODES: readonly ActCode[] = ['BNS', 'BNSS', 'BSA'];
+
+/**
+ * Words advocates use that the enacted text does not. Each is how the Act
+ * itself says it, checked against the Gazette text (0021).
+ */
+const STATUTORY_WORDING: ReadonlyArray<[RegExp, string]> = [
+  [/\banticipatory\s+bail\b|अग्रिम\s+जमानत/gi, ' bail apprehending arrest '],
+  [/\bdefault\s+bail\b/gi, ' investigation cannot be completed '],
+  [/\bquash(?:ing|ed)?\b(?:\s+(?:of\s+)?(?:an?\s+|the\s+)?(?:fir|f\.i\.r\.?))?/gi, ' inherent powers '],
+  [/\bzero\s+fir\b/gi, ' information cognizable cases '],
+  [/\bfir\b|\bf\.i\.r\b\.?|एफआईआर/gi, ' information cognizable '],
+  [/जमानत|\b(?:zamanat|jamanat)\b/gi, ' bail '],
+  [/हत्या|\bhatya\b/gi, ' murder '],
+  [/चोरी|\bchori\b/gi, ' theft '],
+  [/धोखाधड़ी|\bdhokhadhadi\b/gi, ' cheating '],
+  [/बलात्कार|\bbalatkar\b/gi, ' rape '],
+  [/दहेज|\bdahej\b/gi, ' dowry '],
+];
+
+/** Act names, and the words of a question that are about asking, not the subject. */
+const ACT_NAMES =
+  /\b(?:indian\s+penal\s+code|penal\s+code|code\s+of\s+criminal\s+procedure|criminal\s+procedure\s+code|indian\s+evidence\s+act|evidence\s+act|bharatiya\s+nyaya\s+sanhita|nyaya\s+sanhita|bharatiya\s+nagarik\s+suraksha\s+sanhita|nagarik\s+suraksha\s+sanhita|bharatiya\s+sakshya\s+adhiniyam|sakshya\s+adhiniyam|code\s+of\s+civil\s+procedure|civil\s+procedure\s+code|constitution(?:\s+of\s+india)?)\b/gi;
+const NOT_THE_SUBJECT = new Set([
+  'ipc', 'bns', 'bnss', 'bsa', 'crpc', 'iea', 'cpc', 'coi', 'section', 'sections', 'sec', 'provision', 'provisions',
+  'dhara', 'act', 'code', 'sanhita', 'adhiniyam', 'equivalent', 'equivalents', 'corresponding', 'counterpart',
+  'counterparts', 'new', 'old', 'law', 'laws', 'under', 'which', 'what', 'kaun', 'kaunsi', 'kaunsa', 'si', 'sa',
+  'kya', 'hai', 'mein', 'me', 'ka', 'ki', 'ke', 'liye', 'the', 'a', 'an', 'for', 'of', 'in', 'on', 'and', 'or',
+  'any', 'is', 'are', 'was', 'were', 'there', 'deal', 'deals', 'dealing', 'cover', 'covers', 'apply', 'applies',
+  'applicable', 'offence', 'offences', 'number', 'tell', 'please', 'explain', 'about', 'with', 'it',
+]);
+
+/**
+ * The words a provision on this subject would contain, for the full-text
+ * search - "" when the question has none.
+ *
+ * Every word of the query must appear in a section for it to match, so the
+ * router's sentence "BNS section for organised crime and IPC equivalent"
+ * matched nothing, and the answer came from memory: "the BNS (Bihar and
+ * Maharashtra Special) Act". "organised crime" finds BNS 111.
+ */
+export function topicQuery(text: string): string {
+  let t = ` ${text} `;
+  for (const [pattern, wording] of STATUTORY_WORDING) t = t.replace(pattern, wording);
+  return t
+    .toLowerCase()
+    .replace(ACT_NAMES, ' ')
+    // The Acts spell it "organised"; the English stemmer keeps the two apart.
+    .replace(/([a-z]{4,})iz(e|ed|es|ing|ation|ations)\b/g, '$1is$2')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !/^\d+$/.test(w) && !NOT_THE_SUBJECT.has(w))
+    .join(' ');
 }

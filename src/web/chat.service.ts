@@ -580,6 +580,14 @@ export class ChatService {
       }
     }
 
+    // A judgment asked for by name or citation is said to be missing by that
+    // name - not as a topic search for the router's rewrite of the question,
+    // which read as if other judgments might still answer it (precedents.service.ts).
+    const missing = searched.namedCase && !searched.namedCase.found
+      ? `No judgment found for "${searched.namedCase.name}" in Ley Legal's sources. ` +
+        'Check the party names or the citation, or describe the point of law instead.'
+      : null;
+
     const message = await this.chats.appendMessage({
       threadId,
       userId: user.id,
@@ -590,11 +598,11 @@ export class ChatService {
           ? `No reported judgment found for "${cases.query}". ` +
             `${cases.result.totalHits === 1 ? 'One case' : `${cases.result.totalHits} cases`} on eCourts with these parties.`
         : unverified
-          ? `No judgments matched "${intent.searchQuery}" in Ley Legal's sources. ${costLine(charged, true)}`
+          ? `${missing ?? `No judgments matched "${intent.searchQuery}" in Ley Legal's sources.`} ${costLine(charged, true)}`
         : emptyReason === 'no-corpus'
           ? 'No judgment database is available on this deployment yet, so there is nothing to search. ' +
             'You have not been charged.'
-          : `No judgments matched "${intent.searchQuery}". You have not been charged.`,
+          : `${missing ?? `No judgments matched "${intent.searchQuery}".`} You have not been charged.`,
       intent: 'PRECEDENT_SEARCH',
       // Every citation here came straight out of the corpus, so they are
       // verified by construction - there is nothing for the guardrail to strip

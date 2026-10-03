@@ -355,6 +355,23 @@ describe('a named case with no reported judgment', () => {
 
     expect(casesForQuestion).not.toHaveBeenCalled();
   });
+
+  it('says a named judgment it could not find is missing, by its name', async () => {
+    // "Mercy v. Mankind judgment ka ratio kya hai?" - a case that does not
+    // exist - was answered with ten judgments on something else (audit, P8).
+    const { service, precedents } = build({ intent: 'PRECEDENT_SEARCH', precedents: [], casesForQuestion: jest.fn().mockResolvedValue(null) });
+    precedents.search.mockResolvedValueOnce({
+      precedents: [], totalMatches: 0, lexicalOnly: false, source: 'kanoon', latencyMs: 1,
+      namedCase: { name: 'Mercy v. Mankind', found: false },
+    });
+
+    const events = await ask(service, 'Mercy v. Mankind judgment ka ratio kya hai?');
+
+    expect(answers(events)).toBe(
+      'No judgment found for "Mercy v. Mankind" in Ley Legal\'s sources. ' +
+        'Check the party names or the citation, or describe the point of law instead. You have not been charged.',
+    );
+  });
 });
 
 describe('case law', () => {

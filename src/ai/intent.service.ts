@@ -120,6 +120,17 @@ export class IntentService {
       classified.cnrNumber = regexCnr;
       if (classified.intent === 'GENERAL_LEGAL') classified.intent = 'CASE_STATUS';
     }
+    /*
+     * A year is not a section.
+     *
+     * "Mere client par 2023 mein 420 IPC ka case hua tha" came back from the
+     * router as IPC section 2023, and was answered "Section 2023 of the IPC
+     * does not exist" - a realistic question, completely misread. A year the
+     * advocate never wrote as a section gives way to the section they did write.
+     */
+    if (classified.sectionNumber && isYearNotSection(classified.sectionNumber, text)) {
+      classified.sectionNumber = regexSection;
+    }
     if (regexSection && !classified.sectionNumber) classified.sectionNumber = regexSection;
     if (regexAct && !classified.actCode) classified.actCode = regexAct;
 
@@ -182,6 +193,19 @@ export class IntentService {
      * intent is left alone unless it was the catch-all: "judgments on CrPC 125
      * under the BNSS" is still a judgment search.
      */
+    /*
+     * "Which section is it?" is a section question with the number unknown.
+     *
+     * "What is the BNS section for organised crime, and was there any
+     * equivalent in the IPC?" was classified GENERAL_LEGAL and answered from
+     * memory: "the BNS (Bihar and Maharashtra Special) Act ... Section 3". As a
+     * section lookup the codes are searched for the subject, and BNS 111 is
+     * found in its enacted text.
+     */
+    if (classified.intent === 'GENERAL_LEGAL' && !classified.sectionNumber && asksWhichSection(text) && !asksForJudgments(text)) {
+      classified.intent = 'SECTION_LOOKUP';
+    }
+
     const recodified = recodifiedReference(text);
     if (recodified) {
       classified.actCode = recodified.act;
@@ -364,10 +388,36 @@ export class IntentService {
  * found for CNR 831/2024": as though the case did not exist, when what was sent
  * was never a CNR at all.
  */
+/**
+ * True for a number shaped like a year (1800-2099) that the text never names
+ * as a provision - not "section 2023", "s. 2023", "u/s 2023", "Article 2023"
+ * or "2023 IPC". Written that way it is the advocate's number, and a section
+ * outside the Act's range is answered as one that does not exist.
+ */
+export function isYearNotSection(section: string, text: string): boolean {
+  if (!/^(18|19|20)\d\d$/.test(section)) return false;
+  const named = new RegExp(
+    `\\b(?:u\\/s|section|sec|s|article|art|order|rule)\\.?\\s*${section}\\b|\\b${section}\\s+(?:ipc|bns|crpc|bnss|iea|bsa|cpc)\\b|\\b(?:ipc|bns|crpc|bnss|iea|bsa|cpc)\\s*(?:section|sec|s)?\\.?\\s*${section}\\b`,
+    'i',
+  );
+  return !named.test(text);
+}
+
 function cnrFrom(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const cnr = String(value).toUpperCase().replace(/[\s\-_/]/g, '');
   return isValidCnr(cnr) ? cnr : null;
+}
+
+/** Does the question ask which provision covers something - "which section", "kaunsi dhara"? */
+export function asksWhichSection(text: string): boolean {
+  return (
+    /\b(?:which|what)\b[^?.]{0,40}?\b(?:section|provision)s?\b/i.test(text) ||
+    /\bsections?\s+(?:for|on|dealing\s+with|covering|that\s+(?:covers?|deals?|applies))\b/i.test(text) ||
+    /\bkaun\s*s[aie]\b.{0,25}\b(?:section|dhara)\b|\b(?:section|dhara)\b.{0,25}\bkaun\s*s[aie]\b/i.test(text) ||
+    // No \b here: JavaScript's word boundary does not see Devanagari letters.
+    /कौन\s*(?:सी|सा)\s*(?:धारा|section)|(?:धारा|section)\s*कौन\s*(?:सी|सा)/i.test(text)
+  );
 }
 
 export function asksAboutNamedJudgment(text: string): boolean {

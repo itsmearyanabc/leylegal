@@ -76,6 +76,36 @@ function kanoonTid(judgmentId: string): number | null {
 }
 
 /** The name as the advocate would recognise it, for quoting back to them. */
+/**
+ * A judgment asked for by citation alone - "What did the Supreme Court hold in
+ * (2020) 7 SCC 1?" - is found only if a result carries that citation.
+ *
+ * Any results were taken as the answer, and that question was answered with
+ * ten unrelated judgments: Indian Kanoon does not index a judgment by its SCC
+ * citation, so a search for one returns whatever mentions the numbers. Not
+ * found says so and lists nothing, as for a name.
+ */
+function forCitation(
+  typed: string,
+  rows: PrecedentRow[],
+): { precedents: PrecedentRow[]; namedCase?: { name: string; found: boolean } } {
+  const citation = extractCitations(typed)[0];
+  if (!citation) return { precedents: rows };
+
+  const wanted = normaliseCitation(citation);
+  const matches = rows.filter((row) =>
+    [row.neutral_citation, ...(row.reporter_citations ?? [])].some((c) => !!c && normaliseCitation(c) === wanted),
+  );
+  return matches.length > 0
+    ? { precedents: matches, namedCase: { name: citation, found: true } }
+    : { precedents: [], namedCase: { name: citation, found: false } };
+}
+
+/** "(2020) 7 SCC 1" and "2020 7 SCC 1" alike: lowercase, no punctuation or spaces. */
+function normaliseCitation(citation: string): string {
+  return citation.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function display(name: CaseName): string {
   return `${name.petitioner} vs ${name.respondent}`;
 }
@@ -679,17 +709,27 @@ export class PrecedentsService {
     rows: PrecedentRow[],
   ): { precedents: PrecedentRow[]; namedCase?: { name: string; found: boolean } } {
     const name = extractCaseName(typed);
-    if (!name || rows.length === 0) return { precedents: rows };
+    if (!name) return forCitation(typed, rows);
 
     const scored = rows.map((row) => ({ row, score: caseNameScore(name, row.case_title) }));
     const matches = scored.filter((s) => s.score >= CASE_NAME_MATCH);
 
+    /*
+     * Not found is an answer of its own - with nothing listed under it.
+     *
+     * The near misses used to be returned here, and the website showed them as
+     * "3 authorities on the ratio of Mercy v. Mankind" - a case that does not
+     * exist, answered with three real judgments that have nothing to do with
+     * it. A list under a name reads as that case's authorities however it is
+     * headed. Nothing is listed; the reply says the case was not found, and the
+     * caller tries eCourts and the labelled web search after it.
+     */
     if (matches.length === 0) {
       this.logger.info(
         { petitioner: name.petitioner, respondent: name.respondent, candidates: rows.length },
-        'Named case not found in the results - the reply will say so',
+        'Named case not found in the results - the reply will say so, with nothing listed',
       );
-      return { precedents: rows, namedCase: { name: display(name), found: false } };
+      return { precedents: [], namedCase: { name: display(name), found: false } };
     }
 
     /*
@@ -1273,6 +1313,14 @@ export function formatPrecedentPage(
     grouping?: { homeCourt: string | null };
   } = {},
 ): string {
+  if (all.length === 0 && opts.namedCase && !opts.namedCase.found) {
+    return [
+      `*No judgment found: "${opts.namedCase.name}"*`,
+      '',
+      "It is not in Ley Legal's sources. Check the party names or the citation, or describe the point of law instead.",
+    ].join('\n');
+  }
+
   if (all.length === 0) {
     return [
       `*No precedents found*`,

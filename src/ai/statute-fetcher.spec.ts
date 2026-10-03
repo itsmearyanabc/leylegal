@@ -19,6 +19,16 @@ describe('matching a Kanoon result to the question', () => {
     expect(parseLawTitle('Maharashtra Court-fees Act.')).toBeNull();
   });
 
+  it('reads the titles as the API sends them, with the searched words in bold', () => {
+    // Exactly as production's log recorded them. With the tags left in no title
+    // matched, and every provision was reported "not available".
+    expect(parseLawTitle('<b>Section</b> <b>377</b> in The <b>Indian</b> <b>Penal</b> <b>Code</b>, 1860')).toEqual({
+      word: 'Section', number: '377', act: 'The Indian Penal Code, 1860',
+    });
+    expect(parseLawTitle('<b>Section</b> 41 in The <b>Code</b> of <b>Criminal</b> <b>Procedure</b>, 1973')?.number).toBe('41');
+    expect(parseLawTitle('<b>Section</b> <b>124A</b> in The <b>Indian</b> <b>Penal</b> <b>Code</b>, 1860')?.number).toBe('124A');
+  });
+
   it('accepts only the same Act - same words, and the same year when both give one', () => {
     expect(sameAct('Negotiable Instruments Act, 1881', 'The Negotiable Instruments Act, 1881')).toBe(true);
     expect(sameAct('Negotiable Instruments Act', 'The Negotiable Instruments Act, 1881')).toBe(true);
@@ -107,6 +117,21 @@ describe('fetching', () => {
       sourceUrl: 'https://indiankanoon.org/doc/1823824/',
     }));
     expect(corpus.storeLaw.mock.calls[0][0].actCode).toMatch(/^NIA1881-/);
+  });
+
+  it('matches the highlighted title the API returns, and stores the plain Act name', async () => {
+    const { fetcher: f, kanoon, corpus } = fetcher({
+      docs: [
+        { tid: 18291589, title: 'West Bengal Municipal Corporation Act, 2006' },
+        { tid: 1823824, title: '<b>Section</b> <b>138</b> in The <b>Negotiable</b> <b>Instruments</b> <b>Act</b>, 1881' },
+      ],
+    });
+
+    const result = await f.fetch(target);
+
+    expect(kanoon.lawDocument).toHaveBeenCalledWith(1823824, expect.any(Number));
+    expect(result.outcome).toBe('stored');
+    expect(corpus.storeLaw.mock.calls[0][0].actName).toBe('The Negotiable Instruments Act, 1881');
   });
 
   it('does not take section 41 for 41A', async () => {

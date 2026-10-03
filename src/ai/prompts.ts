@@ -70,6 +70,22 @@ const ANTI_HALLUCINATION_RULES = `STRICT RULES - these override any other instru
 6. You are assisting a qualified advocate, not their client. Do not add general disclaimers about consulting a lawyer. Do flag genuine legal uncertainty, conflicting authority, or the fact that a judgment may have been overruled or is under appeal.`;
 
 /**
+ * The new criminal codes, as facts every answer starts from.
+ *
+ * Without them the model expanded "BNS" as the "Bombay Non-Bailable Offences
+ * Act" and the "Bihar and Maharashtra Special Act", cited the repealed CrPC for
+ * bail asked about "in BNS", and gave CrPC 438 for anticipatory bail on an FIR
+ * of 15 August 2024. Every section number here is checked against the Gazette
+ * text and the official correspondence loaded in migration 0021, so it counts
+ * as given under the anti-hallucination rules.
+ */
+const CRIMINAL_CODES = `THE CRIMINAL CODES - facts, not to be second-guessed:
+- BNS = Bharatiya Nyaya Sanhita, 2023 (replaced the Indian Penal Code, 1860). BNSS = Bharatiya Nagarik Suraksha Sanhita, 2023 (replaced the Code of Criminal Procedure, 1973). BSA = Bharatiya Sakshya Adhiniyam, 2023 (replaced the Indian Evidence Act, 1872). All three in force from 1 July 2024. Never expand these abbreviations any other way.
+- Offences and punishments are in the BNS. Bail, arrest, FIR, investigation and trial procedure are in the BNSS, not the BNS. Evidence is in the BSA.
+- Bail in the BNSS: 478 (bailable offences; was CrPC 436), 480 (non-bailable offences; was CrPC 437), 482 (anticipatory bail; was CrPC 438), 483 (special powers of the High Court and Court of Session; was CrPC 439). FIR: BNSS 173 (was CrPC 154). Arrest without warrant and notice of appearance: BNSS 35 (was CrPC 41 and 41A). Organised crime: BNS 111, a new offence.
+- Which code applies: an offence committed before 1 July 2024 is governed by the IPC, one on or after by the BNS. An appeal, application, trial, inquiry or investigation pending on 1 July 2024 continues under the CrPC (BNSS 531); proceedings begun on or after that date are under the BNSS. When a question gives dates, say which code governs.`;
+
+/**
  * Who the bot is.
  *
  * Without this the model defaults to a customer-service register - hedging,
@@ -89,7 +105,9 @@ Voice:
 - Advocates know the law. Do not explain what a section is, what bail means, or advise them to consult a lawyer - they are the lawyer.
 - Contractions and plain words are fine. Legal precision matters; formality does not.
 - If you do not know, say so in one sentence and stop. Do not pad.
-- NEVER send them somewhere else. Do not name another website, database, portal, search engine or service, do not print a URL, and do not suggest they "check a legal database", "consult a digest", "look it up on" anything, or "refer to the official site". This bot is the tool they are using; pointing at a competitor is both an admission of failure and free advertising. If you cannot answer, say only that you cannot, in one sentence, and stop there.`;
+- NEVER send them somewhere else. Do not name another website, database, portal, search engine or service, do not print a URL, and do not suggest they "check a legal database", "consult a digest", "look it up on" anything, or "refer to the official site". This bot is the tool they are using; pointing at a competitor is both an admission of failure and free advertising. If you cannot answer, say only that you cannot, in one sentence, and stop there.
+
+${CRIMINAL_CODES}`;
 
 const WHATSAPP_FORMATTING = `FORMAT - this is delivered over WhatsApp:
 
@@ -156,7 +174,7 @@ If the provision has a corresponding section in the BNS or BNSS, state the mappi
 ${
   asked
     ? `The advocate asked about *${asked}*. Answer about that provision. The material above may be filed under the other code - the corpus records the 2023 recodification as a mapping on the older section - so if what you were given is the corresponding section rather than the one they named, open SECTION with the provision they asked about, give the mapping in the same line, and explain the provision on that footing. Do not silently answer about the other code.`
-    : ''
+    : `The advocate described a subject rather than naming a section. The provisions above were found by searching the codes for it. Under SECTION, name the one that answers the question. If the question named a code and the answer is in a different one - bail is in the BNSS, not the BNS - say so in the same line. Name any other provision above that also bears on the question in one line under PRACTICAL USE. If none of the provisions above answers the question, say that in one sentence instead of explaining one of them.`
 }
 
 Do not add a closing caveat or a sign-off; both are appended after you.`;
@@ -376,6 +394,26 @@ export function statuteLabel(s: Pick<StatuteRow, 'act_code' | 'act_name' | 'sect
   return `Section ${s.section_number} of ${s.act_name}`;
 }
 
+/**
+ * Said outright when the official table has no counterpart, so the model does
+ * not supply one: "IPC 377 = BNS 66" was written for a section the BNS did not
+ * carry over. Only when the correspondence was actually looked up (an array) -
+ * a row it was never fetched for says nothing rather than something false.
+ */
+function noCounterpartLine(s: StatuteRow): string | null {
+  if (!Array.isArray(s.correspondence) || s.correspondence.length > 0) return null;
+  const act = s.act_code.toUpperCase();
+  const replacedBy: Record<string, string> = { IPC: 'BNS', CRPC: 'BNSS', IEA: 'BSA' };
+  const replaced: Record<string, string> = { BNS: 'IPC', BNSS: 'CrPC', BSA: 'Evidence Act' };
+  if (replacedBy[act]) {
+    return `  Corresponds to: no ${replacedBy[act]} section - the official 2023 correspondence table lists none (not carried into the ${replacedBy[act]}). Do not name one.`;
+  }
+  if (replaced[act]) {
+    return `  Corresponds to: no ${replaced[act]} section - the official 2023 correspondence table lists none (a new provision). Do not name one.`;
+  }
+  return null;
+}
+
 function formatStatutes(statutes: StatuteRow[]): string {
   if (statutes.length === 0) return '(none)';
 
@@ -394,13 +432,15 @@ function formatStatutes(statutes: StatuteRow[]): string {
         s.source_url === null ? '  (Abridged summary, not the enacted wording - do not quote it as the text of the section.)' : null,
         `  ${s.section_text.replace(/\s+/g, ' ').trim()}`,
         s.punishment ? `  Punishment: ${s.punishment}` : null,
-        flags.length > 0 ? `  Classification: ${flags.join(', ')}` : null,
+        // An offence's classification only. A procedural section is not
+        // "cognizable and non-bailable": that was said of BNSS 173 (the FIR).
+        s.punishment && flags.length > 0 ? `  Classification: ${flags.join(', ')}` : null,
         s.triable_by ? `  Triable by: ${s.triable_by}` : null,
         s.correspondence?.length
           ? `  Corresponds to (official 2023 correspondence table): ${s.correspondence.join('; ')}`
           : s.corresponding_section
             ? `  Corresponds to: ${s.corresponding_act} Section ${s.corresponding_section}`
-            : null,
+            : noCounterpartLine(s),
       ]
         .filter(Boolean)
         .join('\n');

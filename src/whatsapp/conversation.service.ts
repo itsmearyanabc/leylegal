@@ -1254,8 +1254,11 @@ export class ConversationService {
         namedCase: result.namedCase,
         grouping: result.grouping,
       });
+    const missing = result.namedCase && !result.namedCase.found
+      ? `*No judgment found for "${result.namedCase.name}" in Ley Legal's sources.*`
+      : `*No judgments matched "${intent.searchQuery}" in Ley Legal's sources.*`;
     const body = unverified
-      ? Replies.unverifiedReply(`*No judgments matched "${intent.searchQuery}" in Ley Legal's sources.*`, unverifiedCost, unverified)
+      ? Replies.unverifiedReply(missing, unverifiedCost, unverified)
       : !cases
       ? judgments()
       : result.precedents.length === 0
