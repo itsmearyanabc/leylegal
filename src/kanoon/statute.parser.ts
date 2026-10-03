@@ -37,17 +37,27 @@ export type LawParse = { ok: true; section: LawSection } | { ok: false; reason: 
 
 const ENTITIES: Record<string, string> = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—',
-  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', hellip: '…',
+  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', hellip: '…', shy: '',
 };
 
+/**
+ * Characters with no width. Kanoon's IPC carries soft hyphens from the printed
+ * text - "estab­lished", "im­prisonment" in 124A (API, 2026-10-04) -
+ * which split the word for full-text search and for the model. The joiners
+ * U+200C/U+200D are left: Devanagari needs them.
+ */
+const INVISIBLE = /[­​⁠﻿]/g;
+
 function decode(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
-    if (body[0] === '#') {
-      const code = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
-    }
-    return ENTITIES[body.toLowerCase()] ?? whole;
-  });
+  return text
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
+      if (body[0] === '#') {
+        const code = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+      }
+      return ENTITIES[body.toLowerCase()] ?? whole;
+    })
+    .replace(INVISIBLE, '');
 }
 
 /** A paragraph that is only a marker - "(a)", "(2)", "(iv)" - belongs to the paragraph after it. */

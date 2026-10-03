@@ -138,6 +138,31 @@ describe('a question asking which section', () => {
     expect(asksWhichSection(text)).toBe(false);
   });
 
+  it('is not a section number when the router fills one with words', async () => {
+    // section_number "bail sections" was answered "I don't have the official
+    // text of Section BAIL SECTIONS of the BNS" (audit re-run, S4).
+    const registry = {
+      complete: jest.fn().mockResolvedValue({
+        text: JSON.stringify({ intent: 'SECTION_LOOKUP', section_number: 'bail sections', act_code: 'BNS', search_query: 'bail sections in BNS', confidence: 0.8 }),
+        model: 'router', inputTokens: 0, outputTokens: 0,
+      }),
+    };
+    const intent = await new IntentService(registry as never).classify('जमानत के लिए कौन सी section? BNS में');
+    expect(intent.intent).toBe('SECTION_LOOKUP');
+    expect(intent.sectionNumber).toBeNull();
+  });
+
+  it.each(['302', '498A', '103(1)', '167(2)', 'Article 21', 'Order 39 Rule 1', 'section 65B'])('keeps a real one: %p', async (section) => {
+    const registry = {
+      complete: jest.fn().mockResolvedValue({
+        text: JSON.stringify({ intent: 'SECTION_LOOKUP', section_number: section, confidence: 0.8 }),
+        model: 'router', inputTokens: 0, outputTokens: 0,
+      }),
+    };
+    const intent = await new IntentService(registry as never).classify('explain it');
+    expect(intent.sectionNumber).toBe(section.toUpperCase());
+  });
+
   it('is looked up in the codes even when the router called it general', async () => {
     const registry = {
       complete: jest.fn().mockResolvedValue({

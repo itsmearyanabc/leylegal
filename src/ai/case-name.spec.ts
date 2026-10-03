@@ -187,6 +187,19 @@ describe('scoring a title against the name that was asked for', () => {
     expect(caseNameScore(name, 'Rajesh Kumar Mittal vs State Of Bihar & Ors')).toBe(1);
   });
 
+  it('reads an abbreviated office and a name spelt with one vowel or letter more', () => {
+    // Kanoon's title for ADM Jabalpur (audit re-run, P7).
+    const adm = extractCaseName('Is ADM Jabalpur v. Shivkant Shukla still good law?')!;
+    expect(caseNameScore(adm, 'Additional District Magistrate, Jabalpur vs Shivakant Shukla')).toBe(1);
+    expect(caseNameScore(adm, 'A.D.M. Jabalpur vs Shivkant Shukla')).toBe(1);
+    expect(caseNameScore(extractCaseName('Rajesh Kumar Mital vs State of Bihar')!, 'Rajesh Kumar Mittal vs State Of Bihar')).toBe(1);
+  });
+
+  it('does not take a changed letter for another spelling', () => {
+    // "Rajesh" and "Ramesh" are two people; only "Mittal" is shared.
+    expect(caseNameScore(extractCaseName('Rajesh Mittal vs State of Bihar')!, 'Ramesh Mittal vs State Of Bihar')).toBeLessThan(CASE_NAME_MATCH);
+  });
+
   it('rejects the one that was returned instead', () => {
     /*
      * The whole point. *Sunil Bharti Mittal vs The State Of Bihar* shares one

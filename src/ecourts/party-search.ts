@@ -1,4 +1,5 @@
 import { extractCaseName } from '../ai/case-name';
+import { extractCitations } from '../ai/legal-patterns';
 import { CaseRow, NOT_AVAILABLE, isStaleNextHearing, realCaseType, todayInIndia } from './case-status.rows';
 
 /**
@@ -84,6 +85,11 @@ export function partyName(typed: string): string | null {
  * 6897" - as eCourts should be asked for them, or null when it names no case.
  */
 export function partiesIn(question: string): { petitioner: string; respondent: string | null; query: string } | null {
+  // A case cited to a law report is a reported judgment, not a pending matter:
+  // "Summarise State of Bihar v. Ramesh Kumar Yadav, (2021) 4 SCC 999" - an
+  // invented citation - was answered with 565 district-court cases between
+  // parties with those common names (audit re-run, P9).
+  if (extractCitations(question).length > 0) return null;
   const name = extractCaseName(question);
   const petitioner = name ? partyName(name.petitioner) : null;
   if (!name || !petitioner) return null;

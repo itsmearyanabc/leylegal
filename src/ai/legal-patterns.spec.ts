@@ -109,6 +109,16 @@ describe('statute reference extraction', () => {
     const refs = extractStatuteRefs('Sections 302 IPC and 498A IPC, with CrPC 438.');
     expect(refs).toEqual(expect.arrayContaining(['IPC 302', 'IPC 498A', 'CRPC 438']));
   });
+
+  it("reads a year after a code as the Act's year, not a section", () => {
+    // "a new provision under the BNS 2023" was struck as BNS section 2023 and
+    // printed "a new provision under [unverified]" (audit re-run, NS4).
+    expect(extractStatuteRefs('There is no equivalent in the IPC; this is a new provision under BNS 2023.')).toEqual([]);
+    expect(extractStatuteRefs('the IPC 1860 and the BNS, 2023')).toEqual([]);
+    // Written as a section, it is checked like any other.
+    expect(extractStatuteRefs('BNS Section 2023 does not exist')).toEqual(['BNS 2023']);
+    expect(extractStatuteRefs('Section 2023 BNS')).toEqual(['BNS 2023']);
+  });
 });
 
 describe('query expansion', () => {

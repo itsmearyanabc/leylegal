@@ -360,7 +360,7 @@ export function extractStatuteRefs(text: string): string[] {
     /\b(?:u\/s|under\s+sections?|sections?|secs?|s|orders?|o|articles?|arts?)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s*(?:of\s+(?:the\s+)?)?\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
   // "IPC Section 302" / "IPC 302"
   const backward =
-    /\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b\s*(?:sections?|secs?|s|orders?|o|articles?|arts?)?\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/gi;
+    /\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b\s*(sections?|secs?|s|orders?|o|articles?|arts?)?\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/gi;
   // Bare "302 IPC" with no section keyword at all. Needed for the second and
   // later items in a list - "Sections 302 IPC and 498A IPC" carries the keyword
   // only once, so without this every provision after the first goes unverified.
@@ -372,10 +372,16 @@ export function extractStatuteRefs(text: string): string[] {
   while ((match = forward.exec(text)) !== null) {
     refs.add(`${match[2].toUpperCase()} ${match[1].replace(/\s+/g, '').toUpperCase()}`);
   }
+  // A year straight after a code with no "section" between them is the Act's
+  // year: "a new provision under the BNS 2023" was struck as section 2023 of
+  // the BNS and printed as "under [unverified]" (audit re-run, NS4).
+  const year = /^(18|19|20)\d\d$/;
   while ((match = backward.exec(text)) !== null) {
-    refs.add(`${match[1].toUpperCase()} ${match[2].replace(/\s+/g, '').toUpperCase()}`);
+    if (!match[2] && year.test(match[3])) continue;
+    refs.add(`${match[1].toUpperCase()} ${match[3].replace(/\s+/g, '').toUpperCase()}`);
   }
   while ((match = bare.exec(text)) !== null) {
+    if (year.test(match[1])) continue;
     refs.add(`${match[2].toUpperCase()} ${match[1].replace(/\s+/g, '').toUpperCase()}`);
   }
 

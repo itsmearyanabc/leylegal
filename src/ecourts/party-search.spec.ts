@@ -75,6 +75,13 @@ describe('the parties in a question', () => {
     expect(partiesIn('judgments on default bail under section 187 BNSS')).toBeNull();
     expect(partyName('ka status')).toBeNull();
   });
+
+  it('does not search for the parties of a judgment cited to a law report', () => {
+    // An invented SCC citation was answered with 565 district-court cases
+    // between parties with those common names (audit re-run, P9).
+    expect(partiesIn('Summarise State of Bihar v. Ramesh Kumar Yadav, (2021) 4 SCC 999')).toBeNull();
+    expect(partiesIn('Arnesh Kumar v. State of Bihar AIR 2014 SC 2756')).toBeNull();
+  });
 });
 
 describe('a case found', () => {

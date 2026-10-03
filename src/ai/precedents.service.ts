@@ -110,6 +110,16 @@ function display(name: CaseName): string {
   return `${name.petitioner} vs ${name.respondent}`;
 }
 
+/** An order in a matter rather than its judgment: Kanoon files them as "Supreme Court - Daily Orders", "Patna High Court - Orders". */
+function isOrder(row: PrecedentRow): boolean {
+  return /\b(daily\s+)?orders\s*$/i.test(row.court_name ?? '');
+}
+
+/** The Supreme Court above every other court. */
+function courtWeight(row: PrecedentRow): number {
+  return /^supreme court\b/i.test(row.court_name ?? '') ? 1 : 0;
+}
+
 /**
  * Every query worth sending to Indian Kanoon for this question, most specific
  * first.
@@ -745,7 +755,19 @@ export class PrecedentsService {
      * Padding an exact answer with near misses makes the answer look like a
      * guess. A topic search is one question away when they want authorities.
      */
-    const found = matches.sort((a, b) => b.score - a.score).map((s) => s.row);
+    /*
+     * The judgment, ahead of the orders in the same matter.
+     *
+     * "Is Prakash v. Phulavati still good law?" listed nine Supreme Court
+     * daily orders around the one judgment, and "Arnesh Kumar v. State of
+     * Bihar" put six Patna High Court bail orders above the 2014 Supreme Court
+     * judgment (audit re-run, NP8 and V1). When a court's own judgment is among
+     * the matches, its orders are dropped, and the Supreme Court comes first.
+     */
+    const judgments = matches.filter((s) => !isOrder(s.row));
+    const found = (judgments.length > 0 ? judgments : matches)
+      .sort((a, b) => courtWeight(b.row) - courtWeight(a.row) || b.score - a.score)
+      .map((s) => s.row);
 
     this.logger.info(
       { petitioner: name.petitioner, matched: found.length, discarded: rows.length - found.length },

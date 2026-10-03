@@ -298,9 +298,44 @@ export function caseNameScore(name: CaseName, title: string): number {
  */
 export const CASE_NAME_MATCH = 0.7;
 
-/** Distinctive tokens: lowercased, punctuation gone, noise words dropped. */
+/**
+ * Offices a cause title spells out and an advocate abbreviates - or the other
+ * way round. "ADM Jabalpur v. Shivkant Shukla" is titled "Additional District
+ * Magistrate, Jabalpur vs Shivakant Shukla" on Indian Kanoon, and was reported
+ * as not found (audit re-run, P7).
+ */
+const ABBREVIATIONS: Record<string, string[]> = {
+  adm: ['additional', 'district', 'magistrate'],
+  sdm: ['sub', 'divisional', 'magistrate'],
+  dm: ['district', 'magistrate'],
+  cit: ['commissioner', 'income', 'tax'],
+  addl: ['additional'],
+  commr: ['commissioner'],
+  dy: ['deputy'],
+};
+
+/** Distinctive tokens: lowercased, punctuation gone, abbreviations spelt out, noise words dropped. */
 function signal(value: string): string[] {
-  return words(value).filter((word) => !NOISE.has(word) && word.length > 1);
+  return words(value)
+    .flatMap((word) => ABBREVIATIONS[word.replace(/[.]/g, '')] ?? [word])
+    .filter((word) => !NOISE.has(word) && word.length > 1);
+}
+
+/**
+ * The same name, allowing one transliteration difference: a vowel or a doubled
+ * letter written in one and not the other - "Shivkant" and "Shivakant",
+ * "Mital" and "Mittal". Never a changed letter: "Rajesh" is not "Ramesh".
+ */
+function sameName(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [short, long] = a.length < b.length ? [a, b] : [b, a];
+  if (short.length < 4 || long.length !== short.length + 1) return false;
+  for (let i = 0; i < long.length; i++) {
+    if (long.slice(0, i) + long.slice(i + 1) !== short) continue;
+    const dropped = long[i];
+    if ('aeiou'.includes(dropped) || long[i - 1] === dropped || long[i + 1] === dropped) return true;
+  }
+  return false;
 }
 
 function words(value: string): string[] {
@@ -314,8 +349,7 @@ function words(value: string): string[] {
 /** What fraction of the wanted tokens appear in the candidate. */
 function overlap(wanted: string[], found: string[]): number {
   if (wanted.length === 0) return 0;
-  const have = new Set(found);
-  const hits = wanted.filter((word) => have.has(word)).length;
+  const hits = wanted.filter((word) => found.some((other) => sameName(word, other))).length;
   return hits / wanted.length;
 }
 

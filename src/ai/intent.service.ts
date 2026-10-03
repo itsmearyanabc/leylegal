@@ -312,7 +312,7 @@ export class IntentService {
       intent: VALID_INTENTS.includes(rawIntent) ? rawIntent : 'GENERAL_LEGAL',
       language: this.normaliseLanguage(parsed.language),
       cnrNumber: cnrFrom(parsed.cnr_number),
-      sectionNumber: parsed.section_number ? String(parsed.section_number).toUpperCase() : null,
+      sectionNumber: sectionFrom(parsed.section_number),
       actCode: normaliseActCode(parsed.act_code ? String(parsed.act_code) : null),
       actName: typeof parsed.act_name === 'string' && parsed.act_name.trim() ? parsed.act_name.trim().slice(0, 160) : null,
       searchQuery: parsed.search_query ? String(parsed.search_query) : original,
@@ -401,6 +401,22 @@ export function isYearNotSection(section: string, text: string): boolean {
     'i',
   );
   return !named.test(text);
+}
+
+/**
+ * The router's section number, kept only when it is one: "302", "498A",
+ * "103(1)", "Article 21", "Order 39 Rule 1".
+ *
+ * "जमानत के लिए कौन सी section? BNS में" came back with section_number "bail
+ * sections", and was answered "I don't have the official text of Section BAIL
+ * SECTIONS of the BNS" - with a credit spent on the web for it.
+ */
+const PROVISION = /^(?:(?:SECTION|SEC\.?|ARTICLE|ART\.?|ORDER)\s*)?\d+[A-Z]{0,3}(?:\s*\(\s*[0-9A-Z]+\s*\))*(?:\s+RULE\s+\d+[A-Z]?(?:\s*\(\s*[0-9A-Z]+\s*\))*)?$/;
+
+function sectionFrom(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const section = String(value).trim().toUpperCase();
+  return PROVISION.test(section) ? section : null;
 }
 
 function cnrFrom(value: unknown): string | null {

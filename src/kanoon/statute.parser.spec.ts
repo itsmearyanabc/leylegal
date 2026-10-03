@@ -68,3 +68,35 @@ describe('reading a provision from Kanoon', () => {
     expect(parsed).toEqual({ ok: true, section: { number: '7', title: 'Penalty & costs', text: '7. Subject to section 5, the fine — ₹100.' } });
   });
 });
+
+/**
+ * The API's own response for IPC 124A, captured on the server on 2026-10-04 -
+ * the first law document read through the API rather than the website. Its
+ * `doc` is the website's markup, and it carries the printed text's soft
+ * hyphens.
+ */
+describe('a law document as the API returns it', () => {
+  const api = JSON.parse(readFileSync(join(__dirname, '__fixtures__', 'kanoon-law-ipc-124a.json'), 'utf8')) as { doc: string; title: string };
+
+  it('reads the section, its title and every Explanation', () => {
+    const parsed = parseLawSection(api.doc, '124A');
+    if (!parsed.ok) throw new Error(parsed.reason);
+
+    expect(parsed.section.number).toBe('124A');
+    expect(parsed.section.title).toBe('Sedition');
+    expect(parsed.section.text.split('\n')).toEqual([
+      expect.stringMatching(/^124A\. Whoever, by words, either spoken or written,.* or with fine\.$/),
+      'Explanation 1.— The expression “disaffection” includes disloyalty and all feelings of enmity.',
+      expect.stringMatching(/^Explanation 2\.— Comments expressing disapprobation of the measures of the Government/),
+      expect.stringMatching(/^Explanation 3\.— Comments expressing disapprobation of the administrative or other action/),
+    ]);
+  });
+
+  it('drops the soft hyphens, so "established" is one word', () => {
+    const parsed = parseLawSection(api.doc, '124A');
+    if (!parsed.ok) throw new Error(parsed.reason);
+
+    expect(parsed.section.text).toContain('the Government established by law in India, shall be punished with imprisonment for life');
+    expect(parsed.section.text).not.toMatch(/­/);
+  });
+});

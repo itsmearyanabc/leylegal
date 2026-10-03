@@ -368,6 +368,45 @@ describe('the documented search operators, and falling back from them', () => {
     expect(result.precedents).toEqual([]);
   });
 
+  it('shows the judgment ahead of the orders in the same matter, and drops the orders', async () => {
+    // Titles, courts and dates as Kanoon returned them for V1 in the audit
+    // re-run of 4 October: six Patna High Court orders came before the 2014
+    // Supreme Court judgment.
+    const { service, kanoon } = build();
+    const listed: [string, string, string][] = [
+      ['Arnesh Kumar Yadav @ Arnesh Kumar @ vs The State Of Bihar', 'Patna High Court - Orders', '2026-01-29'],
+      ['Supreme Court In Arnesh Kumar vs State Of Bihar', 'Andhra Pradesh High Court - Amravati', '2019-09-30'],
+      ['Arnesh Kumar @ Kumar Amresh vs State Of Bihar And Anr', 'Patna High Court - Orders', '2019-07-03'],
+      ['Arnesh Kumar vs State Of Bihar & Anr', 'Supreme Court of India', '2014-07-02'],
+      ['Arnesh Kumar vs State Of Bihar', 'Supreme Court - Daily Orders', '2014-07-02'],
+    ];
+    kanoon.search.mockResolvedValue(
+      listed.map(([case_title, court_name, date], i) => kanoonRow({ judgment_id: `kanoon:${700 + i}`, case_title, court_name, judgment_date: new Date(date) })),
+    );
+
+    const result = await service.search(named('Give the full SCC citation of Arnesh Kumar v. State of Bihar and its key holding') as never);
+
+    expect(result.namedCase?.found).toBe(true);
+    expect(result.precedents.map((p) => p.court_name)).toEqual(['Supreme Court of India', 'Andhra Pradesh High Court - Amravati']);
+  });
+
+  it('finds a judgment written with an abbreviated office and another spelling of a name', async () => {
+    // "ADM Jabalpur v. Shivkant Shukla" is titled in full on Kanoon, with
+    // "Shivakant" - and was reported as not found (audit re-run, P7).
+    const { service, kanoon } = build();
+    const adm = kanoonRow({
+      judgment_id: 'kanoon:1735094',
+      case_title: 'Additional District Magistrate, Jabalpur vs Shivakant Shukla',
+      court_name: 'Supreme Court of India',
+    });
+    kanoon.search.mockResolvedValue([stranger, adm]);
+
+    const result = await service.search(named('Is ADM Jabalpur v. Shivkant Shukla still good law?') as never);
+
+    expect(result.namedCase?.found).toBe(true);
+    expect(result.precedents.map((p) => p.case_title)).toEqual(['Additional District Magistrate, Jabalpur vs Shivakant Shukla']);
+  });
+
   it('finds a judgment asked for by citation only when a result carries that citation', async () => {
     // "What did the Supreme Court hold in (2020) 7 SCC 1?" was answered with
     // ten unrelated judgments: any result was taken as the answer.
