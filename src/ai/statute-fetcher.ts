@@ -5,7 +5,7 @@ import { CacheRepository } from '../database/repositories/cache.repository';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { StatuteRow } from '../database/types';
 import { KanoonService } from '../kanoon/kanoon.service';
-import { parseLawSection } from '../kanoon/statute.parser';
+import { parseActSection, parseLawSection } from '../kanoon/statute.parser';
 import { ClassifiedIntent } from './intent.service';
 import { ActCode, KNOWN_ACTS } from './legal-patterns';
 
@@ -54,6 +54,8 @@ const LOADED_IN_FULL: readonly string[] = ['BNS', 'BNSS', 'BSA'];
 
 const SEARCH_TIMEOUT_MS = 4_000;
 const DOCUMENT_TIMEOUT_MS = 3_000;
+/** A whole Act is larger - Kanoon's CrPC page is 1.5 MB - and is read once per section, then kept. */
+const ACT_TIMEOUT_MS = 8_000;
 const MISS_TTL_SECONDS = 86_400;
 
 export interface ProvisionTarget {
@@ -232,6 +234,40 @@ export class StatuteFetcher {
     this.logger.info({ act: target.actName, number: target.number, outcome, ms: Date.now() - started, ...extra }, 'Official provision lookup');
   }
 
+  /**
+   * A section Kanoon has no page for, read out of the whole Act.
+   *
+   * "Section 41A CrPC" and "Section 65B Evidence Act" were found by no wording
+   * of the search (checked on the server, 4 Oct 2026): Kanoon folds them into
+   * section 41 and section 65 of its copy of the Act. A section of the same
+   * Act in the results leads to the Act through its "Entire Act" link, and
+   * parseActSection reads the one asked for out of it - or refuses.
+   */
+  private async fromEntireAct(
+    target: ProvisionTarget,
+    docs: { tid: number; title?: string }[],
+  ): Promise<{ ok: true; tid: number; kanoonAct: string; title: string; text: string; sourceUrl: string } | { ok: false; why: string }> {
+    const sibling = docs
+      .map((d) => ({ tid: d.tid, title: parseLawTitle(d.title ?? '') }))
+      .find((d) => d.title !== null && d.title.word === target.word && sameAct(target.actName, d.title.act));
+    if (!sibling?.title) return { ok: false, why: 'no section of the same Act in the results' };
+
+    const actTid = await this.kanoon.entireActOf(sibling.tid, DOCUMENT_TIMEOUT_MS);
+    if (actTid === null) return { ok: false, why: `section ${sibling.tid} names no Entire Act` };
+
+    const parsed = parseActSection(await this.kanoon.lawDocument(actTid, ACT_TIMEOUT_MS), target.number);
+    if (!parsed.ok) return { ok: false, why: `Act ${actTid}: ${parsed.reason}` };
+
+    return {
+      ok: true,
+      tid: actTid,
+      kanoonAct: sibling.title.act,
+      title: parsed.section.title,
+      text: parsed.section.text,
+      sourceUrl: `https://indiankanoon.org/doc/${actTid}/`,
+    };
+  }
+
   /** One search, one document, every check - or why not. */
   private async official(target: ProvisionTarget): Promise<
     | { ok: true; tid: number; kanoonAct: string; title: string; text: string; sourceUrl: string }
@@ -241,7 +277,9 @@ export class StatuteFetcher {
 
     // v2: the misses recorded before parseLawTitle read highlighted titles are
     // not misses - Kanoon had every one of them - so they are left behind.
-    const missKey = `law-miss:v2:${createHash('sha256').update(lawQuery(target)).digest('hex').slice(0, 32)}`;
+    // v3: nor those recorded before a section was read out of its whole Act
+    // (fromEntireAct) - CrPC 41A and Evidence Act 65B among them.
+    const missKey = `law-miss:v3:${createHash('sha256').update(lawQuery(target)).digest('hex').slice(0, 32)}`;
     if (await this.cache.get<boolean>(missKey).catch(() => null)) {
       return { ok: false, outcome: 'not-found', detail: { from: 'miss cache' } };
     }
@@ -253,8 +291,10 @@ export class StatuteFetcher {
         return t !== null && t.word === target.word && t.number === target.number && sameAct(target.actName, t.act);
       });
       if (!match) {
+        const fromAct = await this.fromEntireAct(target, docs);
+        if (fromAct.ok) return fromAct;
         await this.cache.set(missKey, true, MISS_TTL_SECONDS).catch(() => undefined);
-        return { ok: false, outcome: 'not-found', detail: { candidates: docs.slice(0, 3).map((d) => d.title) } };
+        return { ok: false, outcome: 'not-found', detail: { candidates: docs.slice(0, 3).map((d) => d.title), entireAct: fromAct.why } };
       }
 
       const parsed = parseLawSection(await this.kanoon.lawDocument(match.tid, DOCUMENT_TIMEOUT_MS), target.number);

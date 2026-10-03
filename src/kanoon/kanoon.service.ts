@@ -185,6 +185,20 @@ export class KanoonService {
   }
 
   /**
+   * The whole Act a provision's document belongs to, from its `covers` - IPC
+   * 124A's response (captured on the server, 2026-10-04) carried
+   * `"covers":[{"tid":1569253,"title":"Entire Act"}]`. Null when it names none.
+   */
+  async entireActOf(tid: number, timeoutMs: number): Promise<number | null> {
+    if (!this.isConfigured) throw new KanoonNotConfiguredError();
+    const payload = await this.breaker.execute(() =>
+      this.post<{ covers?: { tid?: unknown; title?: unknown }[] }>(`${this.baseUrl}/doc/${tid}/`, timeoutMs),
+    );
+    const act = (payload.covers ?? []).find((c) => typeof c.tid === 'number' && /^entire act$/i.test(String(c.title ?? '').trim()));
+    return act ? (act.tid as number) : null;
+  }
+
+  /**
    * Fetch enough pages to satisfy `maxResults`.
    *
    * Pages are requested in parallel: Kanoon has no page-size parameter, so 15

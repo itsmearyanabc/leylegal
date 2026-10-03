@@ -79,12 +79,15 @@ describe('what can be fetched', () => {
 describe('fetching', () => {
   const target = { actCode: null, actName: 'Negotiable Instruments Act, 1881', word: 'Section' as const, number: '138' };
 
-  function fetcher(over: { docs?: unknown[]; html?: string; configured?: boolean; searchError?: Error } = {}) {
+  function fetcher(
+    over: { docs?: unknown[]; html?: string; configured?: boolean; searchError?: Error; entireAct?: number; actHtml?: string } = {},
+  ) {
     const store = new Map<string, unknown>();
     const kanoon = {
       isConfigured: over.configured ?? true,
       searchLaws: over.searchError ? jest.fn().mockRejectedValue(over.searchError) : jest.fn().mockResolvedValue(over.docs ?? []),
-      lawDocument: jest.fn().mockResolvedValue(over.html ?? NI_138),
+      lawDocument: jest.fn(async (tid: number) => (tid === over.entireAct ? over.actHtml : over.html ?? NI_138)),
+      entireActOf: jest.fn().mockResolvedValue(over.entireAct ?? null),
     };
     const corpus = {
       storeLaw: jest.fn(async (law: Record<string, string>) => ({ id: 'row-1', act_code: law.actCode, act_name: law.actName, section_number: law.sectionNumber, section_title: law.sectionTitle, section_text: law.sectionText, source_url: law.sourceUrl })),
@@ -141,6 +144,77 @@ describe('fetching', () => {
 
     expect(result).toEqual({ row: null, outcome: 'not-found' });
     expect(kanoon.lawDocument).not.toHaveBeenCalled();
+  });
+
+  /*
+   * No wording of the search finds CrPC 41A or Evidence Act 65B (run on the
+   * server, 4 Oct 2026): the results below are the ones it returned. Kanoon
+   * folds both into the section before them in its copy of the Act, and the
+   * fixtures are those blocks exactly as indiankanoon.org serves them.
+   */
+  const fixture = (name: string) => readFileSync(join(__dirname, '..', 'kanoon', '__fixtures__', name), 'utf8');
+
+  it('reads a section Kanoon has no page for out of the whole Act', async () => {
+    const { fetcher: f, kanoon, corpus } = fetcher({
+      docs: [
+        { tid: 1899251, title: '<b>Section</b> 41 in The <b>Code</b> of <b>Criminal</b> <b>Procedure</b>, 1973' },
+        { tid: 75059398, title: '<b>Section</b> 35 in Bharatiya Nagarik Suraksha Sanhita, 2023' },
+        { tid: 91117739, title: 'Bharatiya Nagarik Suraksha Sanhita, 2023' },
+      ],
+      entireAct: 445276,
+      actHtml: fixture('law-crpc-act-41.html'),
+    });
+
+    const result = await f.fetch({ actCode: 'CRPC', actName: 'Code of Criminal Procedure, 1973', word: 'Section', number: '41A' });
+
+    expect(result.outcome).toBe('stored');
+    expect(kanoon.entireActOf).toHaveBeenCalledWith(1899251, expect.any(Number));
+    expect(kanoon.lawDocument).toHaveBeenCalledWith(445276, expect.any(Number));
+    const law = corpus.storeLaw.mock.calls[0][0];
+    expect(law).toMatchObject({
+      actCode: 'CRPC',
+      actName: 'Code of Criminal Procedure, 1973',
+      sectionNumber: '41A',
+      sectionTitle: 'Notice of appearance before police officer',
+      sourceUrl: 'https://indiankanoon.org/doc/445276/',
+    });
+    expect(law.sectionText).toMatch(/^41A\. \(1\) \[The police officer shall\], in all cases where the arrest of a person is not required/);
+    expect(law.sectionText.split('\n')).toHaveLength(4);
+  });
+
+  it('reads 65B out of section 65 of the Evidence Act, where Kanoon put it', async () => {
+    const { fetcher: f, corpus } = fetcher({
+      docs: [
+        { tid: 23526241, title: 'The Bombay Land Revenue Code, 1879' },
+        { tid: 47360416, title: '<b>Section</b> 54 in The Telecommunications <b>Act</b>, 2023' },
+        { tid: 487818, title: '<b>Section</b> 65 in The <b>Indian</b> <b>Evidence</b> <b>Act</b>, 1872' },
+      ],
+      entireAct: 1953529,
+      actHtml: fixture('law-iea-act-65.html'),
+    });
+
+    const result = await f.fetch({ actCode: 'IEA', actName: 'Indian Evidence Act, 1872', word: 'Section', number: '65B' });
+
+    expect(result.outcome).toBe('stored');
+    const law = corpus.storeLaw.mock.calls[0][0];
+    expect(law.sectionTitle).toBe('Admissibility of electronic records');
+    expect(law.sectionText).toMatch(/^65B\. \(1\) Notwithstanding anything contained in this Act/);
+    expect(law.sectionText).toMatch(/derived therefrom by calculation, comparison or any other process\.\]$/);
+    // Section 65's own clauses are not part of it.
+    expect(law.sectionText).not.toContain('Secondary evidence may be given');
+  });
+
+  it('is not found when the whole Act does not have it either', async () => {
+    const { fetcher: f, corpus } = fetcher({
+      docs: [{ tid: 1899251, title: 'Section 41 in The Code of Criminal Procedure, 1973' }],
+      entireAct: 445276,
+      actHtml: fixture('law-crpc-act-41.html'),
+    });
+
+    const result = await f.fetch({ actCode: 'CRPC', actName: 'Code of Criminal Procedure, 1973', word: 'Section', number: '41E' });
+
+    expect(result).toEqual({ row: null, outcome: 'not-found' });
+    expect(corpus.storeLaw).not.toHaveBeenCalled();
   });
 
   it('remembers a miss for a day, so it is not paid for again', async () => {
