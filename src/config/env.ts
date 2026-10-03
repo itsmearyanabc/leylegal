@@ -313,13 +313,14 @@ const envSchema = z.object({
    * time they are read after this lands, and keep whatever they had already
    * spent down to.
    *
-   * Admins and auditors stay unlimited: they are staff, their usage is not
-   * revenue, and metering it would mean topping up the people investigating a
-   * billing complaint.
+   * No role is unlimited - the founder's rule, 4 Oct 2026. Admins and auditors
+   * were, by a default of -1; a negative value configured anywhere is now read
+   * as 0 (CreditsService.monthlyAllowance), and staff who need credits are
+   * granted them from the admin panel like anyone else.
    */
   CREDITS_FREE_MONTHLY: z.coerce.number().int().default(30),
   CREDITS_VERIFIED_MONTHLY: z.coerce.number().int().default(30),
-  CREDITS_ADMIN_MONTHLY: z.coerce.number().int().default(-1),
+  CREDITS_ADMIN_MONTHLY: z.coerce.number().int().default(30),
 
   // --- Credits --------------------------------------------------------------
   /**

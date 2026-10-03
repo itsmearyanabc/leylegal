@@ -230,8 +230,8 @@ export class AdminController {
     const user = await this.users.approve(userId, body?.notes ?? null);
     if (!user) return { updated: false };
 
-    // Tell the advocate immediately - the whole point of verifying is the
-    // unlimited quota, and they cannot see the change otherwise.
+    // Tell the advocate immediately - they cannot see the change otherwise.
+    // (Verifying changes standing, not balance: no account is unlimited.)
     //
     // Web-only accounts have no number to message. They are not skipped
     // silently: `notified` is returned so the panel can say the approval

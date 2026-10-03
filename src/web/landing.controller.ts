@@ -166,7 +166,8 @@ export class LandingController {
       // disagree.
       searchCost: CREDIT_COST.SECTION_LOOKUP,
       caseStatusCost: CREDIT_COST.CASE_STATUS,
-      freeMonthlyCredits: this.settings.getNumber('CREDITS_FREE_MONTHLY', this.env.CREDITS_FREE_MONTHLY),
+      // Never negative: no account is unlimited (CreditsService.monthlyAllowance).
+      freeMonthlyCredits: Math.max(0, this.settings.getNumber('CREDITS_FREE_MONTHLY', this.env.CREDITS_FREE_MONTHLY)),
       signupBonus: this.settings.getNumber('CREDITS_SIGNUP_BONUS', this.env.CREDITS_SIGNUP_BONUS),
 
       whatsappNumber: this.settings.get('WHATSAPP_DISPLAY_NUMBER'),

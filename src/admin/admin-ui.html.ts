@@ -996,9 +996,10 @@ function viewUsers() {
               '<td>' + statusPill(u.verification_status) + '</td>' +
               '<td style="text-align:right" class="mono" title="' + u.free_credits + ' free + ' +
                 u.paid_credits + ' durable">' +
-                (u.role === 'GUEST_LAWYER'
-                  ? (u.free_credits + u.paid_credits)
-                  : '<span style="color:var(--muted)">∞</span>') +
+                // The balance, for every role. This printed "∞" for anyone but a
+                // guest - while the wallet gave a verified advocate 30 credits -
+                // and no account is unlimited (CreditsService.monthlyAllowance).
+                (u.free_credits + u.paid_credits) +
                 /*
                  * Adjusting credits belonged to the account, and lived on
                  * another screen behind a UUID.

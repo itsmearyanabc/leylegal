@@ -74,6 +74,31 @@ const UNLIMITED: CreditBalance = Object.freeze({
 });
 
 
+/** The allowance .env sets for a role, before the no-unlimited rule. */
+function configuredAllowance(env: AppEnv, role: UserRole): number {
+  switch (role) {
+    case 'GUEST_LAWYER':
+      return env.CREDITS_FREE_MONTHLY;
+    case 'VERIFIED_ADVOCATE':
+      return env.CREDITS_VERIFIED_MONTHLY;
+    case 'LEGAL_AUDITOR':
+    case 'SUPER_ADMIN':
+      return env.CREDITS_ADMIN_MONTHLY;
+    default:
+      return env.CREDITS_FREE_MONTHLY;
+  }
+}
+
+const warnedUnlimited = new Set<string>();
+function warnUnlimitedOnce(logger: { warn: (obj: object, msg: string) => void }, role: string, configured: number): void {
+  if (warnedUnlimited.has(role)) return;
+  warnedUnlimited.add(role);
+  logger.warn(
+    { role, configured },
+    'A negative credit allowance (once "unlimited") is configured for this role; no account is unlimited, so it is read as 0 - set a number in .env',
+  );
+}
+
 function normaliseQuery(value: string): string {
   return value
     .toLowerCase()
@@ -186,19 +211,23 @@ export class CreditsService {
    * kind of stale word that is not worth keeping.
    */
   monthlyAllowance(role: UserRole): number {
-    switch (role) {
-      case 'GUEST_LAWYER':
-        return this.env.CREDITS_FREE_MONTHLY;
-      case 'VERIFIED_ADVOCATE':
-        return this.env.CREDITS_VERIFIED_MONTHLY;
-      case 'LEGAL_AUDITOR':
-      case 'SUPER_ADMIN':
-        return this.env.CREDITS_ADMIN_MONTHLY;
-      default:
-        return this.env.CREDITS_FREE_MONTHLY;
+    const configured = configuredAllowance(this.env, role);
+    /*
+     * No account has unlimited credits - the founder's rule, 4 Oct 2026.
+     *
+     * A negative allowance used to mean unlimited, and CREDITS_ADMIN_MONTHLY
+     * defaulted to -1. Every unlimited path below hangs off this one number,
+     * so it is clamped here: a negative value configured anywhere reads as
+     * none, and is said once in the log so it can be put right in .env.
+     */
+    if (configured < 0) {
+      warnUnlimitedOnce(this.logger, role, configured);
+      return 0;
     }
+    return configured;
   }
 
+  /** Always false since no role is unlimited (see monthlyAllowance); kept so callers read plainly. */
   isUnlimited(role: UserRole): boolean {
     return this.monthlyAllowance(role) < 0;
   }

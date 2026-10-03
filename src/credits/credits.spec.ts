@@ -138,13 +138,10 @@ describe('CreditsService.spend', () => {
     );
   });
 
-  it('never touches the ledger for an unlimited role', async () => {
-    // SUPER_ADMIN, not VERIFIED_ADVOCATE. Advocates are metered like everyone
-    // else - usage is credits, and verification confirms a licence rather than
-    // buying an exemption from the meter. Staff stay unlimited because their
-    // usage is not revenue, and metering it would mean topping up whoever is
-    // investigating a billing complaint.
-    const { service, repo } = build();
+  it('meters an admin like everyone else - no role is unlimited', async () => {
+    // SUPER_ADMIN used to bypass the wallet: CREDITS_ADMIN_MONTHLY defaulted to
+    // -1, "unlimited". The founder's rule (4 Oct 2026) is that no account is.
+    const { service, repo } = build({ CREDITS_ADMIN_MONTHLY: '-1' });
 
     const decision = await service.spend({
       userId: 'u1',
@@ -154,10 +151,9 @@ describe('CreditsService.spend', () => {
       reference: 'spend:web:msg-2',
     });
 
-    expect(decision.allowed).toBe(true);
-    expect(decision.charged).toBe(0);
-    expect(decision.balance.unlimited).toBe(true);
-    expect(repo.spend).not.toHaveBeenCalled();
+    expect(decision.balance.unlimited).toBe(false);
+    // A configured -1 reads as no allowance, not as unlimited.
+    expect(repo.spend).toHaveBeenCalledWith(expect.objectContaining({ monthlyAllowance: 0 }));
   });
 
   it('charges a verified advocate like everyone else', async () => {
@@ -253,10 +249,10 @@ describe('CreditsService.refund', () => {
     expect(repo.refundByReference).toHaveBeenCalledWith('u1', 'spend:web:msg-1', 'delivery failed');
   });
 
-  it('does nothing for an unlimited role', async () => {
-    const { service, repo } = build();
+  it('refunds an admin too - no role is unlimited', async () => {
+    const { service, repo } = build({ CREDITS_ADMIN_MONTHLY: '-1' });
     await service.refund('u1', 'SUPER_ADMIN', 'spend:web:msg-1', 'delivery failed');
-    expect(repo.refundByReference).not.toHaveBeenCalled();
+    expect(repo.refundByReference).toHaveBeenCalled();
   });
 
   it('never throws, because the caller is already handling a failure', async () => {
@@ -269,11 +265,29 @@ describe('CreditsService.refund', () => {
   });
 });
 
-describe('CreditsService.creditLine', () => {
-  it('says unlimited rather than a number', async () => {
+describe('no account is unlimited', () => {
+  it.each(['GUEST_LAWYER', 'VERIFIED_ADVOCATE', 'LEGAL_AUDITOR', 'SUPER_ADMIN'] as const)(
+    '%s, even with -1 configured for every role',
+    (role) => {
+      const { service } = build({ CREDITS_FREE_MONTHLY: '-1', CREDITS_VERIFIED_MONTHLY: '-1', CREDITS_ADMIN_MONTHLY: '-1' });
+      expect(service.isUnlimited(role)).toBe(false);
+      expect(service.monthlyAllowance(role)).toBe(0);
+    },
+  );
+
+  it('defaults to a finite allowance for every role', () => {
     const { service } = build();
+    for (const role of ['GUEST_LAWYER', 'VERIFIED_ADVOCATE', 'LEGAL_AUDITOR', 'SUPER_ADMIN'] as const) {
+      expect(service.monthlyAllowance(role)).toBe(30);
+    }
+  });
+});
+
+describe('CreditsService.creditLine', () => {
+  it('never says unlimited - no role is', async () => {
+    const { service } = build({ CREDITS_ADMIN_MONTHLY: '-1' });
     const balance = await service.balance('u1', 'SUPER_ADMIN');
-    expect(service.creditLine(balance)).toBe('Credits: unlimited');
+    expect(service.creditLine(balance)).not.toMatch(/unlimited/i);
   });
 
   it('reports the allowance without promising a refill', async () => {
@@ -348,12 +362,11 @@ describe('charging an unverified answer', () => {
     expect(repo.spend).not.toHaveBeenCalled();
   });
 
-  it('moves nothing for an unlimited role', async () => {
-    const { service, repo } = build();
+  it('charges an admin too - no role is unlimited', async () => {
+    const { service, repo } = build({ CREDITS_ADMIN_MONTHLY: '-1' });
+    repo.refundByReference.mockResolvedValueOnce({ refunded: 2, free: 0, paid: 0 });
 
-    expect(await service.chargeUnverified('u1', 'SUPER_ADMIN', 'spend:web:msg-1')).toBe(0);
-    expect(repo.refundByReference).not.toHaveBeenCalled();
-    expect(repo.spend).not.toHaveBeenCalled();
+    expect(await service.chargeUnverified('u1', 'SUPER_ADMIN', 'spend:web:msg-1')).toBe(1);
   });
 
   it('costs one credit', () => {
