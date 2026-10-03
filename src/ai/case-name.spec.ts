@@ -1,6 +1,6 @@
 import { CASE_NAME_MATCH, caseNameScore, extractCaseName } from './case-name';
 import { ClassifiedIntent } from './intent.service';
-import { kanoonQuery } from './precedents.service';
+import { kanoonQueries, kanoonQuery } from './precedents.service';
 
 /**
  * Reported from a live session, with the screenshot.
@@ -275,6 +275,24 @@ describe('what actually gets sent to Indian Kanoon', () => {
    * the rest are scaffolding, so the signal is a third of the string. Once a
    * cause title has been recognised, the parties are the query.
    */
+  it('ends with the words of the title Kanoon keeps when it shortens a party', () => {
+    // On indiankanoon.org the judgment is "Additional District Magistrate,
+    // ... vs Shivakant Shukla": no "Jabalpur", another spelling of the name.
+    // Only this last query finds it (audit re-run, P7).
+    expect(kanoonQueries(intent({ rawText: 'Is ADM Jabalpur v. Shivkant Shukla still good law?' }))).toEqual([
+      'title: ADM Jabalpur Shivkant Shukla',
+      'ADM Jabalpur Shivkant Shukla',
+      'title: additional district magistrate shukla',
+    ]);
+  });
+
+  it('pays for no query twice when the shortened title is the same one', () => {
+    expect(kanoonQueries(intent({ rawText: 'Mercy v. Mankind judgment ka ratio kya hai?' }))).toEqual([
+      'title: Mercy Mankind',
+      'Mercy Mankind',
+    ]);
+  });
+
   it('searches for the parties, not the sentence around them', () => {
     expect(
       kanoonQuery(

@@ -12,7 +12,7 @@ import { SettingsService } from '../settings/settings.service';
 import { CAVEAT, RETURN_TO_MENU } from '../whatsapp/replies';
 import { EmbeddingService } from './embedding.service';
 import { ClassifiedIntent } from './intent.service';
-import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName } from './case-name';
+import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName, looseTitle } from './case-name';
 import { expandQuery, extractCitations } from './legal-patterns';
 import { buildCaseSummaryPrompt, buildPrincipleSummaryPrompt } from './prompts';
 import { DEFAULT_SUMMARY_WORDS, requestedWordCount, withoutLengthRequest } from './summary-length';
@@ -162,10 +162,14 @@ export function kanoonQueries(intent: ClassifiedIntent): string[] {
   if (name) {
     const parties = `${name.petitioner} ${name.respondent}`;
     const scope = (name.court ? courtFilter(name.court) : null) ?? court;
+    // Last, the words of the title Kanoon keeps when it shortens a party
+    // (looseTitle) - only reached when everything before found somebody else.
+    const loose = looseTitle(name);
     return unique([
       scope ? `doctypes:${scope} title: ${parties}` : `title: ${parties}`,
       scope ? `${parties} doctypes:${scope}` : parties,
       parties,
+      !loose ? '' : scope ? `doctypes:${scope} title: ${loose}` : `title: ${loose}`,
     ]);
   }
 
@@ -184,7 +188,10 @@ export function kanoonQuery(intent: ClassifiedIntent): string {
 }
 
 function unique(queries: string[]): string[] {
-  return queries.filter((query, index) => query && queries.indexOf(query) === index);
+  // Kanoon's search ignores case, so "title: Mercy Mankind" and "title: mercy
+  // mankind" are one query - and each one sent is paid for.
+  const seen = queries.map((query) => query.toLowerCase());
+  return queries.filter((query, index) => query && seen.indexOf(seen[index]) === index);
 }
 
 /**

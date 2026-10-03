@@ -493,6 +493,11 @@ const NOT_THE_SUBJECT = new Set([
   'kya', 'hai', 'mein', 'me', 'ka', 'ki', 'ke', 'liye', 'the', 'a', 'an', 'for', 'of', 'in', 'on', 'and', 'or',
   'any', 'is', 'are', 'was', 'were', 'there', 'deal', 'deals', 'dealing', 'cover', 'covers', 'apply', 'applies',
   'applicable', 'offence', 'offences', 'number', 'tell', 'please', 'explain', 'about', 'with', 'it',
+  // "provisions relating to bail" found BNSS 232 alone - committal, which
+  // mentions "the provisions of this Sanhita relating to bail" in passing
+  // (audit re-run, S4). The connecting words are not the subject either.
+  'to', 'by', 'from', 'as', 'at', 'be', 'related', 'relating', 'relate', 'regarding', 'concerning', 'pertaining', 'governing', 'governs', 'mentioned',
+  'konsi', 'konsa', 'kaunse', 'batao', 'bataiye', 'hota', 'hoti', 'lagti', 'lagta', 'lagu', 'hain',
 ]);
 
 /**

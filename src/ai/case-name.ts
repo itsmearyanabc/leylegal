@@ -322,6 +322,23 @@ function signal(value: string): string[] {
 }
 
 /**
+ * The words of a cause title that survive Kanoon's shortening of it, for a last
+ * title search: the start of the petitioner, abbreviations spelt out, and the
+ * respondent's last name. Null when that is no narrower than the full title.
+ *
+ * Kanoon cuts a long party to its first words: ADM Jabalpur is titled
+ * "Additional District Magistrate, ... vs Shivakant Shukla", so "Jabalpur" is
+ * not in the title, and "Shivkant" is spelt differently. "title: additional
+ * district magistrate shukla" finds it (checked on indiankanoon.org, 4 Oct 2026).
+ */
+export function looseTitle(name: CaseName): string | null {
+  const petitioner = signal(name.petitioner).slice(0, 3);
+  const respondent = signal(name.respondent).slice(-1);
+  const words = [...petitioner, ...respondent];
+  return words.length >= 2 ? words.join(' ') : null;
+}
+
+/**
  * The same name, allowing one transliteration difference: a vowel or a doubled
  * letter written in one and not the other - "Shivkant" and "Shivakant",
  * "Mital" and "Mittal". Never a changed letter: "Rajesh" is not "Ramesh".

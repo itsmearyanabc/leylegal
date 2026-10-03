@@ -23,6 +23,8 @@ describe('the words a provision on the subject would contain', () => {
     ['bail section in BNS', 'bail'],
     ['electronic evidence certificate under Bharatiya Sakshya Adhiniyam', 'electronic evidence certificate'],
     ['punishment for stalking a woman', 'punishment stalking woman'],
+    // The router's phrasing on the live site (audit re-run, S4).
+    ['provisions relating to bail in BNS', 'bail'],
   ])('%p -> %p', (question, words) => {
     expect(topicQuery(question)).toBe(words);
   });
@@ -30,7 +32,7 @@ describe('the words a provision on the subject would contain', () => {
   it.each([
     // Each in the enacted wording of the section it is: BNSS 482, 187, 173, 528.
     ['anticipatory bail under BNSS', 'bail apprehending arrest'],
-    ['section for default bail', 'investigation cannot be completed'],
+    ['section for default bail', 'investigation cannot completed'],
     ['which section for zero FIR', 'information cognizable cases'],
     ['quashing of FIR under BNSS', 'inherent powers'],
   ])('says %p as the Act does', (question, words) => {
