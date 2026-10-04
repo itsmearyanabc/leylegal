@@ -483,6 +483,31 @@ export function expandQuery(query: string, maxExtraTerms = 6): string {
 }
 
 /**
+ * An Act named in the question that is not one of the codes - "the
+ * Negotiable Instruments Act", "Hindu Marriage Act, 1955" - or null.
+ *
+ * Written in title case it is taken as it stands; in lower case only after
+ * "of / under / in the" and with at least two words before "act", so that
+ * "the guilty act" is not read as the name of an Act.
+ */
+export function namedOtherAct(text: string): string | null {
+  const titled = /\b((?:[A-Z][A-Za-z&'-]*\.?\s+){1,8}Act)\b(,?\s*\d{4})?/.exec(text);
+  const lower = /\b(?:of|under|in)\s+the\s+((?:[a-z]+\s+){2,6}act)\b(,?\s*\d{4})?/i.exec(text);
+  const found = titled ?? lower;
+  if (!found) return null;
+  // "What Act applies?", "Under which Act..." - words of the question, not of a name.
+  const words = found[1].trim().split(/\s+/);
+  while (words.length > 1 && NOT_A_NAME.has(words[0].toLowerCase().replace(/\.$/, ''))) words.shift();
+  if (words.length < 2) return null;
+  return `${words.join(' ')}${found[2] ? `, ${found[2].replace(/\D/g, '')}` : ''}`;
+}
+
+const NOT_A_NAME = new Set([
+  'what', 'which', 'whose', 'is', 'was', 'does', 'do', 'under', 'of', 'in', 'for', 'any', 'this', 'that', 'each',
+  'every', 'same', 'said', 'the', 'a', 'an', 'section', 'sec', 'article', 'order', 'rule', 'new', 'old',
+]);
+
+/**
  * The criminal codes a question about a subject is looked up in: the three
  * 2023 codes, whichever of the six it named.
  *

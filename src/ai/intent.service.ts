@@ -11,6 +11,7 @@ import {
   extractSectionReference,
   isValidCnr,
   namedActs,
+  namedOtherAct,
   recodifiedReference,
   normaliseActCode,
 } from './legal-patterns';
@@ -147,6 +148,23 @@ export class IntentService {
     }
     if (regexSection && !classified.sectionNumber) classified.sectionNumber = regexSection;
     if (regexAct && !classified.actCode) classified.actCode = regexAct;
+
+    /*
+     * An Act the advocate named that is none of the codes is the Act asked
+     * about.
+     *
+     * "What are the ingredients of Section 138 of the Negotiable Instruments
+     * Act?" came back from the router once as BNS 138 - abduction - and was
+     * answered "The corpus doesn't cover Section 138 of the Negotiable
+     * Instruments Act"; minutes earlier the same question had been answered
+     * from the Act's official text (live, 4 October). A code the question does
+     * not name gives way to the Act it does.
+     */
+    const otherAct = namedActs(text).size === 0 ? namedOtherAct(text) : null;
+    if (otherAct) {
+      classified.actCode = null;
+      classified.actName ??= otherAct;
+    }
 
     /*
      * An Act the advocate did not name is not a reason to say the section does

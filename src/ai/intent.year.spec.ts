@@ -95,3 +95,41 @@ describe('a code the advocate did not name', () => {
     expect(intent.actCode).toBe('BNS');
   });
 });
+
+/**
+ * Live, 4 October: the same question about the NI Act was answered from the
+ * Act's official text, then minutes later routed as BNS 138 (abduction) and
+ * answered "The corpus doesn't cover Section 138 of the Negotiable
+ * Instruments Act".
+ */
+describe('an Act the advocate named that is not one of the codes', () => {
+  const NI = 'What are the ingredients of Section 138 of the Negotiable Instruments Act?';
+
+  it('outranks a code the router guessed', async () => {
+    const intent = await classifierSaying({ intent: 'SECTION_LOOKUP', section_number: '138', act_code: 'BNS', confidence: 0.9 }).classify(NI);
+    expect(intent.actCode).toBeNull();
+    expect(intent.actName).toBe('Negotiable Instruments Act');
+    expect(intent.sectionNumber).toBe('138');
+  });
+
+  it("keeps the router's full name for it when the router gave one", async () => {
+    const intent = await classifierSaying({
+      intent: 'SECTION_LOOKUP', section_number: '138', act_code: 'BNS', act_name: 'Negotiable Instruments Act, 1881', confidence: 0.9,
+    }).classify(NI);
+    expect(intent.actCode).toBeNull();
+    expect(intent.actName).toBe('Negotiable Instruments Act, 1881');
+  });
+
+  it('leaves a question that names a code to that code', async () => {
+    const intent = await classifierSaying({ intent: 'SECTION_LOOKUP', section_number: '65B', act_code: 'IEA', confidence: 0.9 }).classify(
+      'What does Section 65B(4) of the Evidence Act require in the certificate?',
+    );
+    expect(intent.actCode).toBe('IEA');
+  });
+
+  it('does not take a question word for the name of an Act', async () => {
+    const intent = await classifierSaying({ intent: 'SECTION_LOOKUP', act_code: 'BNS', confidence: 0.9 }).classify('Under which Act is dowry death punished?');
+    expect(intent.actCode).toBe('BNS');
+    expect(intent.actName ?? null).toBeNull();
+  });
+});
