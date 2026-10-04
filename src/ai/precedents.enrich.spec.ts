@@ -331,6 +331,41 @@ describe('the documented search operators, and falling back from them', () => {
     expect(result.precedents[0].case_title).toBe('Rajesh Kumar Mittal vs State Of Bihar');
   });
 
+  it('searches on past results that are only orders in the matter, for the judgment', async () => {
+    // "Satender Kumar Antil v. CBI bail guidelines" stopped at a 2024 daily
+    // order; the 2022 judgment was one search further on (live test, X24).
+    // Titles and courts as Kanoon returned them.
+    const { service, kanoon } = build();
+    const order = kanoonRow({
+      judgment_id: 'kanoon:801', case_title: 'Satender Kumar Antil vs Central Bureau Of Investigation',
+      court_name: 'Supreme Court - Daily Orders', judgment_date: new Date('2024-08-06'),
+    });
+    const judgment = kanoonRow({
+      judgment_id: 'kanoon:802', case_title: 'Satender Kumar Antil vs Central Bureau Of Investigation',
+      court_name: 'Supreme Court of India', judgment_date: new Date('2022-07-11'),
+    });
+    // "CBI" is not in Kanoon's title; the last search spells it out (looseTitle).
+    kanoon.search.mockImplementation(async (query: string) =>
+      query === 'title: satender kumar antil investigation' ? [judgment] : query.startsWith('title:') ? [] : [order],
+    );
+
+    const result = await service.search(named('Satender Kumar Antil v. CBI bail guidelines') as never);
+
+    expect(kanoon.search).toHaveBeenCalledTimes(3);
+    expect(result.precedents.map((p) => p.court_name)).toEqual(['Supreme Court of India']);
+  });
+
+  it('shows the orders when no search finds the judgment itself', async () => {
+    const { service, kanoon } = build();
+    const order = kanoonRow({ judgment_id: 'kanoon:801', case_title: 'Satender Kumar Antil vs Central Bureau Of Investigation', court_name: 'Supreme Court - Daily Orders' });
+    kanoon.search.mockImplementation(async (query: string) => (query.startsWith('title:') ? [] : [order]));
+
+    const result = await service.search(named('Satender Kumar Antil v. CBI bail guidelines') as never);
+
+    expect(result.namedCase?.found).toBe(true);
+    expect(result.precedents.map((p) => p.court_name)).toEqual(['Supreme Court - Daily Orders']);
+  });
+
   it('skips an attempt that throws instead of losing the whole search', async () => {
     // A malformed operand is still a failed call, and it must not cost the
     // advocate the broader search behind it.

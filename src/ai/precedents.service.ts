@@ -438,19 +438,24 @@ export class PrecedentsService {
     const attempts = kanoonQueries(intent);
     const name = extractCaseName(intent.rawText);
 
-    const answers = (rows: PrecedentRow[]): boolean =>
-      name
-        ? rows.some((row) => caseNameScore(name, row.case_title) >= CASE_NAME_MATCH)
-        : rows.length > 0;
+    const matching = (rows: PrecedentRow[]): PrecedentRow[] =>
+      name ? rows.filter((row) => caseNameScore(name, row.case_title) >= CASE_NAME_MATCH) : rows;
 
     let nearest: PrecedentRow[] = [];
+    // Results naming the case that are only its orders. "Satender Kumar Antil
+    // v. CBI bail guidelines" stopped at a 2024 daily order; the 2022 judgment
+    // was a search further on (live test, 4 Oct, X24). Kept in case no search
+    // finds the judgment itself.
+    let ordersOnly: PrecedentRow[] = [];
     let failures = 0;
     let lastError: unknown = null;
 
     for (const query of attempts) {
       try {
         const rows = await this.kanoon.search(query, this.maxResults);
-        if (answers(rows)) return rows;
+        const matches = matching(rows);
+        if (matches.length > 0 && (!name || matches.some((row) => !isOrder(row)))) return rows;
+        if (matches.length > 0 && ordersOnly.length === 0) ordersOnly = rows;
         if (nearest.length === 0) nearest = rows;
 
         this.logger.info(
@@ -465,7 +470,7 @@ export class PrecedentsService {
     }
 
     if (failures === attempts.length) throw lastError;
-    return nearest;
+    return ordersOnly.length > 0 ? ordersOnly : nearest;
   }
 
   /**
