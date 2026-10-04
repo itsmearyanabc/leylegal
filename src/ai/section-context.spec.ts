@@ -20,7 +20,7 @@ function row(section_number: string, section_title: string, match_type: StatuteR
 function service(found: StatuteRow[], fetcherOver: Partial<Record<'stored' | 'fetch' | 'replaceAbridged', jest.Mock>> = {}) {
   const registry = { complete: jest.fn().mockResolvedValue({ text: 'answer', model: 'm', inputTokens: 1, outputTokens: 1 }) };
   const guardrails = { verify: jest.fn(async (text: string) => ({ text, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null })) };
-  const corpus = { searchStatutes: jest.fn().mockResolvedValue(found), withCorrespondence: jest.fn(async (rows: StatuteRow[]) => rows) };
+  const corpus = { searchStatutes: jest.fn().mockResolvedValue(found), withCorrespondence: jest.fn(async (rows: StatuteRow[]) => rows), statutesCovering: jest.fn().mockResolvedValue([]) };
   const statutes = {
     stored: fetcherOver.stored ?? jest.fn().mockResolvedValue(null),
     fetch: fetcherOver.fetch ?? jest.fn().mockResolvedValue({ row: null, outcome: 'not-found' }),

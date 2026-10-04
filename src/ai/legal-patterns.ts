@@ -474,7 +474,16 @@ const STATUTORY_WORDING: ReadonlyArray<[RegExp, string]> = [
   [/\bdefault\s+bail\b/gi, ' investigation cannot be completed '],
   [/\bquash(?:ing|ed)?\b(?:\s+(?:of\s+)?(?:an?\s+|the\s+)?(?:fir|f\.i\.r\.?))?/gi, ' inherent powers '],
   [/\bzero\s+fir\b/gi, ' information cognizable cases '],
-  [/\bfir\b|\bf\.i\.r\b\.?|एफआईआर/gi, ' information cognizable '],
+  // BNS 103(2): "a group of five or more persons acting in concert commits
+  // murder on the ground of race, caste or community ..." - the Act never
+  // says "lynching", and "Which BNS section covers mob lynching?" was answered
+  // "BNS Section 101" from memory (live test, 4 Oct, X5).
+  [/\bmob\s+lynch(?:ing|ed|ings)?\b|\blynch(?:ing|ed|ings)\b/gi, ' group five persons acting concert murder '],
+  // An FIR named in passing - "my client is named in an FIR" - is not the
+  // subject: read as "information cognizable" it put BNSS 173 above theft in
+  // a question about theft and bail (live test, 4 Oct, X34). The FIR section
+  // itself is among the facts every answer is given (prompts.ts).
+  [/\bfir\b|\bf\.i\.r\b\.?|एफआईआर/gi, ' '],
   [/जमानत|\b(?:zamanat|jamanat)\b/gi, ' bail '],
   [/हत्या|\bhatya\b/gi, ' murder '],
   [/चोरी|\bchori\b/gi, ' theft '],
@@ -498,6 +507,12 @@ const NOT_THE_SUBJECT = new Set([
   // (audit re-run, S4). The connecting words are not the subject either.
   'to', 'by', 'from', 'as', 'at', 'be', 'related', 'relating', 'relate', 'regarding', 'concerning', 'pertaining', 'governing', 'governs', 'mentioned',
   'konsi', 'konsa', 'kaunse', 'batao', 'bataiye', 'hota', 'hoti', 'lagti', 'lagta', 'lagu', 'hain',
+  // Verbs of asking, and the advocate's own framing ("my client", "theft ka
+  // case") - "makes" matched "... to make certain report" (live test, X9).
+  'case', 'cases', 'make', 'makes', 'made', 'allow', 'allows', 'allowed', 'require', 'requires', 'provide', 'provides',
+  'say', 'says', 'mean', 'means', 'happen', 'happens', 'get', 'gets', 'give', 'gives', 'registered', 'client', 'clients',
+  'my', 'mera', 'meri', 'mere', 'aur', 'kis', 'ya', 'tha', 'thi', 'hua', 'hui', 'karna', 'chahiye', 'kaise', 'milti',
+  'milta', 'milegi', 'sakta', 'sakti', 'par', 'se', 'ko', 'bhi', 'ab', 'naamit', 'lagega', 'law',
 ]);
 
 /**

@@ -387,7 +387,8 @@ describe('the documented search operators, and falling back from them', () => {
     const result = await service.search(named('Give the full SCC citation of Arnesh Kumar v. State of Bihar and its key holding') as never);
 
     expect(result.namedCase?.found).toBe(true);
-    expect(result.precedents.map((p) => p.court_name)).toEqual(['Supreme Court of India', 'Andhra Pradesh High Court - Amravati']);
+    // "Supreme Court In Arnesh Kumar" is someone else's title - see samePetitioner.
+    expect(result.precedents.map((p) => p.court_name)).toEqual(['Supreme Court of India']);
   });
 
   it('finds a judgment written with an abbreviated office and another spelling of a name', async () => {

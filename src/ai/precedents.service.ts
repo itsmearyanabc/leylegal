@@ -12,7 +12,7 @@ import { SettingsService } from '../settings/settings.service';
 import { CAVEAT, RETURN_TO_MENU } from '../whatsapp/replies';
 import { EmbeddingService } from './embedding.service';
 import { ClassifiedIntent } from './intent.service';
-import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName, looseTitle } from './case-name';
+import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName, looseTitle, samePetitioner } from './case-name';
 import { expandQuery, extractCitations } from './legal-patterns';
 import { buildCaseSummaryPrompt, buildPrincipleSummaryPrompt } from './prompts';
 import { DEFAULT_SUMMARY_WORDS, requestedWordCount, withoutLengthRequest } from './summary-length';
@@ -772,7 +772,10 @@ export class PrecedentsService {
      * the matches, its orders are dropped, and the Supreme Court comes first.
      */
     const judgments = matches.filter((s) => !isOrder(s.row));
-    const found = (judgments.length > 0 ? judgments : matches)
+    const pool = judgments.length > 0 ? judgments : matches;
+    // And the parties asked for, not someone whose name contains theirs.
+    const same = pool.filter((s) => samePetitioner(name, s.row.case_title));
+    const found = (same.length > 0 ? same : pool)
       .sort((a, b) => courtWeight(b.row) - courtWeight(a.row) || b.score - a.score)
       .map((s) => s.row);
 

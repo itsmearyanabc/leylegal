@@ -216,6 +216,41 @@ export class CorpusRepository {
   }
 
   /**
+   * Sections ranked by how many of these words they contain - a word in the
+   * title counting twice - for a subject no section contains every word of.
+   *
+   * "Which BNSS section allows a zero FIR to be registered?" and "Which BSA
+   * section makes a confession to a police officer inadmissible?" matched
+   * nothing with every word required ("allows", "inadmissible" are not in
+   * the Acts) and were answered from memory, wrongly. Ranked by words covered,
+   * BNSS 173 and BSA 23 come first on the Gazette text (live test, 4 Oct).
+   * `score` is the coverage: 2 x title words + words anywhere.
+   */
+  async statutesCovering(words: string[], acts: string[] | null, limit = 12): Promise<StatuteRow[]> {
+    if (words.length === 0) return [];
+    const upperActs = acts?.map((a) => a.toUpperCase()) ?? null;
+    const rows = await this.db.sql<StatuteRow[]>`
+      SELECT s.id, s.act_code, s.act_name, s.section_number, s.section_title, s.section_text,
+             s.punishment, s.is_cognizable, s.is_bailable, s.is_compoundable, s.triable_by,
+             s.corresponding_act, s.corresponding_section,
+             'FULLTEXT'::TEXT AS match_type,
+             (2 * c.title_hits + c.hits)::DOUBLE PRECISION AS score
+        FROM statutes s
+       CROSS JOIN LATERAL (
+             SELECT count(*) FILTER (WHERE s.search_vector @@ plainto_tsquery('english', w)) AS hits,
+                    count(*) FILTER (WHERE to_tsvector('english', coalesce(s.section_title, '')) @@ plainto_tsquery('english', w)) AS title_hits
+               FROM unnest(${words}::text[]) AS w
+           ) c
+       WHERE s.search_vector @@ websearch_to_tsquery('english', ${words.join(' or ')})
+         AND s.language = 'en'
+         AND (${upperActs}::text[] IS NULL OR upper(s.act_code) = ANY(${upperActs}::text[]))
+       ORDER BY score DESC, ts_rank_cd(s.search_vector, websearch_to_tsquery('english', ${words.join(' or ')})) DESC
+       LIMIT ${limit}
+    `;
+    return this.withCorrespondence(rows);
+  }
+
+  /**
    * The official old/new correspondence for each section, on whichever side of
    * the recodification it sits - and where its text came from, which is what
    * tells an enacted text from 0006's abridged seed.

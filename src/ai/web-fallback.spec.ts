@@ -18,9 +18,17 @@ function withText(text: string, annotations: unknown[] = realResponse.output[1].
 }
 
 describe('the request', () => {
-  it('is the one the real response answered', () => {
+  it('is the one the real response answered, with the rules added since', () => {
     const request = webSearchRequest('gpt-4.1-mini', ...ORDER_39);
-    expect(request.instructions).toBe(realResponse.instructions);
+    // Captured before the rule against offering another case (live test of 4
+    // October: an invented SCC citation got "a similar case is Rakesh Kumar
+    // Banerjee v. Union of India, 2022 INSC 1056"). Everything before it is
+    // what the real response answered.
+    const captured = realResponse.instructions.split('\n');
+    const current = request.instructions.split('\n');
+    expect(current.slice(0, 6)).toEqual(captured.slice(0, 6));
+    expect(request.instructions).toContain('Never offer a different case, a "similar" case or a corrected citation in its place.');
+    expect(current[current.length - 1]).toMatch(/cannot be found - reply with exactly: NO_RESULT$/);
     expect(request.max_output_tokens).toBe(realResponse.max_output_tokens);
     expect(request.tool_choice).toBe('required');
     expect(request.tools).toEqual([

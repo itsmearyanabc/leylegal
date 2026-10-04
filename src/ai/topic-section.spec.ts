@@ -1,7 +1,7 @@
 import { StatuteRow } from '../database/types';
 import { IntentService, asksWhichSection } from './intent.service';
 import { topicQuery } from './legal-patterns';
-import { RagService, closestToBest } from './rag.service';
+import { RagService, closestToBest, mostCovered } from './rag.service';
 
 /**
  * A section asked for by its subject, not its number (audit of 2 October).
@@ -33,8 +33,10 @@ describe('the words a provision on the subject would contain', () => {
     // Each in the enacted wording of the section it is: BNSS 482, 187, 173, 528.
     ['anticipatory bail under BNSS', 'bail apprehending arrest'],
     ['section for default bail', 'investigation cannot completed'],
-    ['which section for zero FIR', 'information cognizable cases'],
+    ['which section for zero FIR', 'information cognizable'],
     ['quashing of FIR under BNSS', 'inherent powers'],
+    // BNS 103(2): "a group of five or more persons acting in concert commits murder".
+    ['Which BNS section covers mob lynching?', 'group five persons acting concert murder'],
   ])('says %p as the Act does', (question, words) => {
     expect(topicQuery(question)).toBe(words);
   });
@@ -80,6 +82,7 @@ describe('searching for a subject', () => {
     const corpus = {
       searchStatutes: jest.fn(async (_q: string, _n: string | null, act: string | null) => byAct[act ?? 'ALL'] ?? []),
       withCorrespondence: jest.fn(async (rows: StatuteRow[]) => rows),
+      statutesCovering: jest.fn().mockResolvedValue([]),
     };
     const registry = { complete: jest.fn().mockResolvedValue({ text: 'answer', model: 'm', inputTokens: 1, outputTokens: 1 }) };
     const guardrails = { verify: jest.fn(async (text: string) => ({ text, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null })) };
@@ -161,8 +164,8 @@ describe('a question asking which section', () => {
         model: 'router', inputTokens: 0, outputTokens: 0,
       }),
     };
-    const intent = await new IntentService(registry as never).classify('explain it');
-    expect(intent.sectionNumber).toBe(section.toUpperCase());
+    const intent = await new IntentService(registry as never).classify(`explain ${section}`);
+    expect(intent.sectionNumber?.toUpperCase()).toBe(section.toUpperCase());
   });
 
   it('is looked up in the codes even when the router called it general', async () => {
@@ -176,5 +179,82 @@ describe('a question asking which section', () => {
       'What is the BNS section for organised crime, and was there any equivalent in the IPC?',
     );
     expect(intent.intent).toBe('SECTION_LOOKUP');
+  });
+});
+
+/**
+ * A subject no section contains every word of (live test of 4 October).
+ *
+ * "allows" and "inadmissible" are not in the Acts, so "Which BNSS section
+ * allows a zero FIR to be registered?" and "Which BSA section makes a
+ * confession to a police officer inadmissible?" found nothing and were
+ * answered from memory, wrongly. Scores are statutesCovering's on the Gazette
+ * text: 2 x title words + words anywhere.
+ */
+describe('the sections covering most of the subject', () => {
+  const scored = (act: string, n: string, title: string, score: number) => ({ ...row(act, n, title, score) });
+
+  it('keeps those near the best, and none when the best covers too little', () => {
+    expect(
+      mostCovered([
+        scored('BNSS', '173', 'Information in cognizable cases', 9),
+        scored('BNSS', '174', 'Information as to non-cognizable cases and investigation of such cases', 9),
+        scored('BNSS', '472', 'Mercy petition in death sentence cases', 5),
+      ]).map((r) => r.section_number),
+    ).toEqual(['173', '174']);
+    expect(mostCovered([scored('BNS', '2', 'Definitions', 2)])).toEqual([]);
+  });
+
+  it('adds the section titled with a second subject of the same question', () => {
+    // "theft ka case hai ... bail kis section mein?" (X34).
+    const rows = [
+      scored('BNSS', '480', 'When bail may be taken in case of non-bailable offence', 6),
+      scored('BNSS', '478', 'In what cases bail to be taken', 6),
+      scored('BNS', '303', 'Theft', 4),
+      scored('BNSS', '146', 'Alteration in allowance', 4),
+    ];
+    expect(mostCovered(rows, ['theft', 'bail']).map((r) => r.section_number)).toEqual(['480', '478', '303']);
+  });
+
+  it('is searched when no section has every word, and not otherwise', async () => {
+    const corpus = {
+      searchStatutes: jest.fn().mockResolvedValue([]),
+      withCorrespondence: jest.fn(async (rows: StatuteRow[]) => rows),
+      statutesCovering: jest.fn().mockResolvedValue([scored('BSA', '23', 'Confession to police officer', 9)]),
+    };
+    const registry = { complete: jest.fn().mockResolvedValue({ text: 'answer', model: 'm', inputTokens: 1, outputTokens: 1 }) };
+    const guardrails = { verify: jest.fn(async (text: string) => ({ text, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null })) };
+    const rag = new RagService(corpus as never, {} as never, registry as never, guardrails as never, {} as never, {} as never);
+
+    await rag.answer({
+      intent: 'SECTION_LOOKUP', language: 'en', cnrNumber: null, sectionNumber: null, actCode: 'BSA',
+      searchQuery: 'Which BSA section makes a confession to a police officer inadmissible?',
+      rawText: 'Which BSA section makes a confession to a police officer inadmissible?', confidence: 0.9,
+    });
+
+    expect(corpus.statutesCovering).toHaveBeenCalledWith(['confession', 'police', 'officer', 'inadmissible'], ['BNS', 'BNSS', 'BSA']);
+    expect(registry.complete.mock.calls[0][0].system).toContain('BSA Section 23 - Confession to police officer');
+  });
+
+  it('does not take a long section that only mentions every word for the answer', async () => {
+    // "theft ... bail" matched BNSS 401 (release on probation) alone.
+    const corpus = {
+      searchStatutes: jest.fn(async (_q: string, _n: string | null, act: string | null) =>
+        act === 'BNSS' ? [scored('BNSS', '401', 'Order to release on probation of good conduct or after admonition', 0.01)] : []),
+      withCorrespondence: jest.fn(async (rows: StatuteRow[]) => rows),
+      statutesCovering: jest.fn().mockResolvedValue([scored('BNS', '303', 'Theft', 3), scored('BNSS', '480', 'When bail may be taken in case of non-bailable offence', 3)]),
+    };
+    const registry = { complete: jest.fn().mockResolvedValue({ text: 'answer', model: 'm', inputTokens: 1, outputTokens: 1 }) };
+    const guardrails = { verify: jest.fn(async (text: string) => ({ text, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null })) };
+    const rag = new RagService(corpus as never, {} as never, registry as never, guardrails as never, {} as never, {} as never);
+
+    await rag.answer({
+      intent: 'SECTION_LOOKUP', language: 'hi', cnrNumber: null, sectionNumber: null, actCode: 'BNS',
+      searchQuery: 'theft bail', rawText: 'theft ka case hai, bail kis section mein?', confidence: 0.9,
+    });
+
+    const system: string = registry.complete.mock.calls[0][0].system;
+    expect(system).toContain('BNS Section 303 - Theft');
+    expect(system).not.toContain('release on probation');
   });
 });

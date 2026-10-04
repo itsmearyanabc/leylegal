@@ -82,7 +82,7 @@ const ANTI_HALLUCINATION_RULES = `STRICT RULES - these override any other instru
 const CRIMINAL_CODES = `THE CRIMINAL CODES - facts, not to be second-guessed:
 - BNS = Bharatiya Nyaya Sanhita, 2023 (replaced the Indian Penal Code, 1860). BNSS = Bharatiya Nagarik Suraksha Sanhita, 2023 (replaced the Code of Criminal Procedure, 1973). BSA = Bharatiya Sakshya Adhiniyam, 2023 (replaced the Indian Evidence Act, 1872). All three in force from 1 July 2024. Never expand these abbreviations any other way.
 - Offences and punishments are in the BNS. Bail, arrest, FIR, investigation and trial procedure are in the BNSS, not the BNS. Evidence is in the BSA.
-- Bail in the BNSS: 478 (bailable offences; was CrPC 436), 480 (non-bailable offences; was CrPC 437), 482 (anticipatory bail; was CrPC 438), 483 (special powers of the High Court and Court of Session; was CrPC 439). FIR: BNSS 173 (was CrPC 154). Arrest without warrant and notice of appearance: BNSS 35 (was CrPC 41 and 41A). Organised crime: BNS 111, a new offence.
+- Bail in the BNSS: 478 (bailable offences; was CrPC 436), 480 (non-bailable offences; was CrPC 437), 482 (anticipatory bail; was CrPC 438), 483 (special powers of the High Court and Court of Session; was CrPC 439). FIR: BNSS 173 (was CrPC 154); BNSS 173(1) lets the information be given "irrespective of the area where the offence is committed" - the zero FIR, now in the statute. Arrest without warrant and notice of appearance: BNSS 35 (was CrPC 41 and 41A). Organised crime: BNS 111, a new offence. Mob lynching: BNS 103(2) (murder) and BNS 117(4) (grievous hurt) - by a group of five or more acting in concert on the ground of race, caste or community, sex, place of birth, language, personal belief or any other similar ground. Confession to a police officer: BSA 23 (was Evidence Act 25 to 27).
 - Which code applies: an offence committed before 1 July 2024 is governed by the IPC, one on or after by the BNS. An appeal, application, trial, inquiry or investigation pending on 1 July 2024 continues under the CrPC (BNSS 531); proceedings begun on or after that date are under the BNSS. When a question gives dates, say which code governs.`;
 
 /**
@@ -204,7 +204,7 @@ export function buildGeneralLegalPrompt(language: string): string {
 
 You have no newly retrieved case law or statutory text for this question. However, if the conversational history contains case law, statutes, or case status information that answers the user's question (e.g. for follow-up questions), you MUST use it and you MAY cite it.
 Otherwise:
-- Do not cite any case. Do not state any section number you were not given.
+- Do not cite any case. Do not state any section number you were not given - the sections in THE CRIMINAL CODES above are given; no other is. Asked which section covers something that is not there, say you could not find it in the Acts' text, and name none: "mob lynching is BNS 101" was written from memory, and BNS 101 is murder.
 - Answer at the level of general legal principle, which is genuinely useful on its own.
 - Add ONE short line noting it is unverified against the corpus - and only when you have actually stated a proposition of law. Do NOT append it to a greeting, a clarifying question, or an explanation of what you can do. A caveat on every message is noise, and advocates stop reading it.
 - If the question really needs authority, say which search would find it.

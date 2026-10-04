@@ -193,7 +193,18 @@ export class RagService {
     const criminal = intent.actCode !== null && (intent.actCode in NEW_CODE_FOR || NEW_CRIMINAL_CODES.includes(intent.actCode));
     const acts: (string | null)[] = criminal ? [...new Set([...NEW_CRIMINAL_CODES, intent.actCode])] : [intent.actCode];
     const rows = (await Promise.all(acts.map((act) => this.corpus.searchStatutes(query, null, act, 4)))).flat();
-    return closestToBest(rows);
+    const exact = closestToBest(rows);
+    const words = query.split(' ');
+
+    // Every word in a section whose title carries one of them is the answer.
+    // Every word somewhere in a long text is not: "theft ... bail" matched
+    // only BNSS 401 (release on probation), which mentions both in passing.
+    if (exact.some((row) => words.some((word) => titleHas(row, word))) || words.length < 2) return exact;
+
+    // Otherwise the sections with the most of the words, title first.
+    const named = acts.filter((act): act is string => act !== null);
+    const covered = mostCovered(await this.corpus.statutesCovering(words, named.length === acts.length ? named : null), words);
+    return covered.length > 0 ? covered : exact;
   }
 
   private explain(
@@ -416,6 +427,37 @@ export function closestToBest(rows: StatuteRow[]): StatuteRow[] {
   const unique = [...new Map(rows.map((r) => [r.id, r])).values()].sort((a, b) => b.score - a.score);
   const best = unique[0]?.score ?? 0;
   return unique.filter((r) => r.score >= best * 0.3).slice(0, 4);
+}
+
+/**
+ * The sections covering the most of the subject's words (statutesCovering's
+ * score: 2 x title words + words anywhere): within 80% of the best, four at
+ * most, and none when the best covers less than a title word and one more or
+ * three words in the body. Measured on the Gazette text: "allows information
+ * cognizable cases registered" scores BNSS 173 and 174 at 9 and BNSS 472 at 5;
+ * "makes confession police officer inadmissible" scores BSA 23 at 9 and BNSS
+ * 193 at 7.
+ */
+export function mostCovered(rows: StatuteRow[], words: string[] = []): StatuteRow[] {
+  const best = rows[0]?.score ?? 0;
+  if (best < 3) return [];
+  const chosen = rows.filter((r) => r.score >= best * 0.8).slice(0, 4);
+
+  // A question about two things gets the section titled with each: "theft ka
+  // case hai ... bail kis section mein?" covered bail best, and BNS 303 (Theft)
+  // was left out (live test, 4 Oct, X34).
+  for (const word of words.filter((w) => w.length >= 4)) {
+    if (chosen.length >= 4) break;
+    if (chosen.some((row) => titleHas(row, word))) continue;
+    const other = rows.find((row) => row.score >= Math.max(3, best * 0.5) && !chosen.includes(row) && titleHas(row, word));
+    if (other) chosen.push(other);
+  }
+  return chosen;
+}
+
+/** Whether a section's title carries this word, near enough for "offences" and "offence". */
+function titleHas(row: StatuteRow, word: string): boolean {
+  return word.length >= 3 && (row.section_title ?? '').toLowerCase().includes(word.slice(0, Math.max(4, word.length - 2)));
 }
 
 /**

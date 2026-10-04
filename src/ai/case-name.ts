@@ -238,8 +238,11 @@ function trimRequestTail(tail: string): string {
     .replace(/[,;]?\s*(?:\(\d{4}\)|\[\d{4}\]|\d{4})\s+\d+\s+[A-Z][A-Za-z.]*\s+\d+.*$/, '')
     .replace(/[,;]?\s*AIR\s+\d{4}\s+[A-Z][A-Za-z.]*\s+\d+.*$/i, '')
     .replace(/[,;]?\s*\d{4}\s+INSC\s+\d+.*$/i, '')
+    // A question after a dash: "Lalita Kumari v. Govt of UP — is FIR
+    // registration mandatory?" (live test, 4 Oct, X23).
+    .replace(/\s+[—–-]+\s+.*$/, '')
     .replace(
-      /\s+(?:and\s+(?:its|the|his|her|their)\b|still\b|judg(?:e)?ments?\b|ka\b|ki\b|ke\b|ratio\b|kya\b|holding\b|good\s+law\b|case\s+law\b|decided\b|summary\b|citation\b|on\s+(?:the\s+)?(?:question|issue|point)\b).*$/i,
+      /\s+(?:and\s+(?:its|the|his|her|their)\b|still\b|judg(?:e)?ments?\b|ka\b|ki\b|ke\b|ratio\b|kya\b|holding\b|good\s+law\b|case\s+law\b|decided\b|summary\b|citation\b|on\s+(?:the\s+)?(?:question|issue|point)\b|hold(?:s)?\b|held\b|about\b|regarding\b|(?:bail\s+)?guidelines?\b|says?\b|said\b|what\b|is\b|was\b|are\b|were\b|does\b|did\b).*$/i,
       '',
     )
     .replace(/[?!]+\s*$/, '')
@@ -284,6 +287,22 @@ export function caseNameScore(name: CaseName, title: string): number {
 }
 
 /**
+ * Whether the title's petitioner is the one asked for and nobody else: every
+ * distinctive word of it is in the name the advocate gave.
+ *
+ * "Summarise Vishaka v. State of Rajasthan" matched the 1997 judgment and four
+ * Rajasthan High Court cases of "Vishaka Jaiswal vs State Of Rajasthan" - a
+ * different person, whose name contains the one asked for (live test, 4 Oct,
+ * X21). Only the petitioner is compared: a respondent's title often runs on
+ * ("Union Of India Ministry Of Law And Justice").
+ */
+export function samePetitioner(name: CaseName, title: string): boolean {
+  const wanted = signal(name.petitioner);
+  const given = signal(title.split(SEPARATOR)[0] ?? '');
+  return given.length > 0 && given.every((word) => wanted.some((w) => sameName(word, w)));
+}
+
+/**
  * The score at which a title is the case that was asked for.
  *
  * Set from the failure it exists to catch. *Sunil Bharti Mittal vs The State Of
@@ -312,6 +331,15 @@ const ABBREVIATIONS: Record<string, string[]> = {
   addl: ['additional'],
   commr: ['commissioner'],
   dy: ['deputy'],
+  // "Satender Kumar Antil v. CBI" is "... vs Central Bureau Of Investigation"
+  // on Kanoon (live test, 4 Oct, X24).
+  cbi: ['central', 'bureau', 'investigation'],
+  nia: ['national', 'investigation', 'agency'],
+  ncb: ['narcotics', 'control', 'bureau'],
+  sebi: ['securities', 'exchange', 'board'],
+  rbi: ['reserve', 'bank'],
+  lic: ['life', 'insurance', 'corporation'],
+  uoi: ['union', 'india'],
 };
 
 /** Distinctive tokens: lowercased, punctuation gone, abbreviations spelt out, noise words dropped. */
@@ -358,7 +386,11 @@ function sameName(a: string, b: string): boolean {
 function words(value: string): string[] {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9\s.]/g, ' ')
+    // Kanoon writes "Govt.Of U.P.& Ors": a dot before a word separates it,
+    // and the dots of initials go - "U.P." is "up", as the advocate types it.
+    .replace(/\.(?=[a-z]{2})/g, ' ')
+    .replace(/\./g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter(Boolean);
 }

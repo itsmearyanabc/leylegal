@@ -15,6 +15,7 @@ import {
   normaliseActCode,
 } from './legal-patterns';
 import { INTENT_CLASSIFIER_SYSTEM } from './prompts';
+import { nonexistentProvision } from './provision-range';
 import { LlmMessage, parseJsonLoose } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
 
@@ -131,8 +132,40 @@ export class IntentService {
     if (classified.sectionNumber && isYearNotSection(classified.sectionNumber, text)) {
       classified.sectionNumber = regexSection;
     }
+    /*
+     * A section number is the advocate's, never the router's.
+     *
+     * "What is the punishment for dowry death under the BNS?" came back as BNS
+     * 304B, and "theft ka case hai ... bail kis section mein?" as BNS 378 - the
+     * old IPC numbers, from the model's memory - and both were answered "does
+     * not exist" (live test of 4 October, X2 and X34). A number written neither
+     * in the question nor earlier in the conversation is dropped, and the
+     * subject search finds the section in the Act's own text.
+     */
+    if (classified.sectionNumber && !writtenIn(classified.sectionNumber, [text, ...history.map((m) => m.content)])) {
+      classified.sectionNumber = regexSection;
+    }
     if (regexSection && !classified.sectionNumber) classified.sectionNumber = regexSection;
     if (regexAct && !classified.actCode) classified.actCode = regexAct;
+
+    /*
+     * An Act the advocate did not name is not a reason to say the section does
+     * not exist.
+     *
+     * "धारा 420 में जमानत मिलती है क्या?" names no Act; the router chose the BNS
+     * and the reply was "Section 420 of the BNS does not exist" (X20). Every
+     * advocate means IPC 420. When the number is past the end of the new code
+     * the router guessed, and inside the code it replaced, it is that one.
+     */
+    const replaced = classified.actCode ? OLD_CODE_FOR[classified.actCode] : undefined;
+    if (
+      replaced &&
+      namedActs(text).size === 0 &&
+      nonexistentProvision(classified.actCode, classified.sectionNumber) &&
+      !nonexistentProvision(replaced, classified.sectionNumber)
+    ) {
+      classified.actCode = replaced;
+    }
 
     /*
      * The act the advocate wrote beats the act the router read.
@@ -388,6 +421,17 @@ export class IntentService {
  * found for CNR 831/2024": as though the case did not exist, when what was sent
  * was never a CNR at all.
  */
+/** The code each of the 2023 codes replaced. */
+const OLD_CODE_FOR: Partial<Record<ActCode, ActCode>> = { BNS: 'IPC', BNSS: 'CRPC', BSA: 'IEA' };
+
+/** Whether the number of a provision - "304B", "Order 39 Rule 1", "Article 21" - appears in any of these texts. */
+export function writtenIn(provision: string, texts: string[]): boolean {
+  const number = /\d+/.exec(provision)?.[0];
+  if (!number) return false;
+  const standalone = new RegExp(`(?:^|[^0-9])${number}(?:[^0-9]|$)`);
+  return texts.some((t) => standalone.test(t));
+}
+
 /**
  * True for a number shaped like a year (1800-2099) that the text never names
  * as a provision - not "section 2023", "s. 2023", "u/s 2023", "Article 2023"

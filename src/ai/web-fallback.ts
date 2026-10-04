@@ -64,7 +64,9 @@ const INSTRUCTIONS = `You help Indian advocates. Ley Legal's verified sources - 
 - Cite a source for every fact.
 - Prefer official sources: court websites (sci.gov.in, ecourts.gov.in, High Court and district court sites), indiacode.nic.in, egazette.gov.in.
 - Never state a section number, case name, citation, date, party or outcome that is not in a page you cite. Do not fill gaps.
-- If the pages you find do not answer the question, reply with exactly: NO_RESULT`;
+- Answer about the case or provision asked for, and nothing else. Never offer a different case, a "similar" case or a corrected citation in its place.
+- Indian law only: leave out anything about other countries.
+- If the pages you find do not answer the question - including when the case or citation asked for cannot be found - reply with exactly: NO_RESULT`;
 
 function task(kind: WebFallbackKind, question: string, detail: string | null): string {
   const asked = `The advocate asked: ${question}`;
