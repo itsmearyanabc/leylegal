@@ -360,6 +360,12 @@ export class CorpusRepository {
     `;
   }
 
+  /** Whether any judgment has been ingested to search - one row read, not a count. */
+  async hasJudgmentChunks(): Promise<boolean> {
+    const [row] = await this.db.sql<{ any: boolean }[]>`SELECT EXISTS (SELECT 1 FROM judgment_chunks) AS any`;
+    return Boolean(row?.any);
+  }
+
   async countCorpus(): Promise<{ judgments: number; chunks: number; statutes: number; embedded: number }> {
     const [row] = await this.db.sql<
       { judgments: string; chunks: string; statutes: string; embedded: string }[]

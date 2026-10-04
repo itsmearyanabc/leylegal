@@ -382,11 +382,36 @@ export class PrecedentsService {
         const ordered = scoped
           ? arrangeByCourt({ home: homeRows, supreme: supremeRows, general: precedents }, homeState, this.maxResults)
           : prioritiseHomeCourt(precedents, homeState);
-        const enriched = await this.withPrinciples(await this.withHeaders(ordered), words);
+        const searchedAt = Date.now();
+        const headed = await this.withHeaders(ordered);
+        const headedAt = Date.now();
+        /*
+         * The card summaries and a named case's own summary are written at the
+         * same time: both read the extracts withHeaders just fetched, and
+         * neither reads the other. One after the other, the named case waited
+         * for every card's summary before its own was begun.
+         *
+         * With a length asked for, the SUMMARY line already is the summary at
+         * that length, and a second one under it would say the same again.
+         */
+        const [enriched, summarised] = await Promise.all([
+          this.withPrinciples(headed, words),
+          namedCase?.found && !words ? this.withSummary(headed) : Promise.resolve(null),
+        ]);
+        const summary = summarised?.[0]?.generated_summary;
+        this.logger.info(
+          {
+            ms: Date.now() - started,
+            searchMs: searchedAt - started,
+            documentsMs: headedAt - searchedAt,
+            summariesMs: Date.now() - headedAt,
+            rows: enriched.length,
+            named: Boolean(namedCase),
+          },
+          'Judgment search timings',
+        );
         return {
-          // With a length asked for, the SUMMARY line already is the summary at
-          // that length, and a second one under it would say the same again.
-          precedents: namedCase?.found && !words ? await this.withSummary(enriched) : enriched,
+          precedents: summary ? [{ ...enriched[0], generated_summary: summary }, ...enriched.slice(1)] : enriched,
           namedCase,
           grouping: scoped ? { homeCourt: homeCourtName(homeState) } : undefined,
           totalMatches: precedents[0]?.total_matches ?? precedents.length,
@@ -855,13 +880,54 @@ export class PrecedentsService {
       return rows;
     }
 
+    // Facts and a holding need more of the judgment than a holding alone
+    // did, and a requested length more again. The Kanoon extract stops at
+    // 2,000 characters, so that is the ceiling either way.
+    const extractChars = words ? 2_000 : 1_500;
+
+    /*
+     * In batches of PRINCIPLE_BATCH, written at the same time.
+     *
+     * One call wrote all ten summaries in turn, and a model writes one word
+     * after another: the cards waited for the tenth summary before the first
+     * was shown. Each summary is written from its own card's extract alone, so
+     * a batch of three says exactly what a batch of ten did - in about the
+     * time of three. A batch that fails costs its own cards their summary, not
+     * every card's.
+     */
+    const batches: (typeof needed)[] = [];
+    for (let i = 0; i < needed.length; i += PRINCIPLE_BATCH) batches.push(needed.slice(i, i + PRINCIPLE_BATCH));
+    const results = await Promise.all(batches.map((batch) => this.summariseBatch(batch.map(({ row }) => row), extractChars, words)));
+
+    const filled = [...rows];
+    let written = 0;
+    batches.forEach((batch, b) => {
+      const result = results[b];
+      if (!result) return;
+      batch.forEach(({ index }, n) => {
+        const principle = result.byNumber.get(n + 1);
+        if (principle) {
+          filled[index] = { ...filled[index], generated_principle: principle };
+          written += 1;
+        } else if (result.declined.has(n + 1)) {
+          filled[index] = { ...filled[index], principle_declined: true };
+        }
+      });
+    });
+
+    this.logger.debug({ asked: needed.length, written, batches: batches.length }, 'Legal principles summarised');
+    return filled;
+  }
+
+  /** One batch of cards' summaries, numbered from 1 - or null when the call fails. */
+  private async summariseBatch(
+    rows: PrecedentRow[],
+    extractChars: number,
+    words?: number | null,
+  ): Promise<{ byNumber: Map<number, string>; declined: Set<number> } | null> {
     try {
-      // Facts and a holding need more of the judgment than a holding alone
-      // did, and a requested length more again. The Kanoon extract stops at
-      // 2,000 characters, so that is the ceiling either way.
-      const extractChars = words ? 2_000 : 1_500;
-      const extracts = needed
-        .map(({ row }, n) =>
+      const extracts = rows
+        .map((row, n) =>
           [
             `${n + 1}. ${row.case_title}`,
             row.court_name ? `Court: ${row.court_name}` : '',
@@ -880,7 +946,7 @@ export class PrecedentsService {
         // Sized to what was asked for. A fixed 900 held ten forty-word entries
         // and truncated the JSON - losing every entry, not just the last - the
         // moment somebody asked for a hundred.
-        maxTokens: summaryTokenBudget(needed.length, words),
+        maxTokens: summaryTokenBudget(rows.length, words),
       });
 
       const parsed = parseJsonLoose<{ principles?: { n?: number; principle?: string }[] }>(result.text);
@@ -905,22 +971,10 @@ export class PrecedentsService {
         else byNumber.set(n, principle);
       }
 
-      const filled = [...rows];
-      needed.forEach(({ index }, n) => {
-        const principle = byNumber.get(n + 1);
-        if (principle) filled[index] = { ...filled[index], generated_principle: principle };
-        else if (declined.has(n + 1)) filled[index] = { ...filled[index], principle_declined: true };
-      });
-
-      this.logger.debug(
-        { asked: needed.length, written: byNumber.size },
-        'Legal principles summarised',
-      );
-
-      return filled;
+      return { byNumber, declined };
     } catch (err) {
-      this.logger.warn({ err }, 'Could not summarise legal principles - cards fall back to the row');
-      return rows;
+      this.logger.warn({ err }, 'Could not summarise legal principles - these cards fall back to the row');
+      return null;
     }
   }
 
@@ -1246,6 +1300,9 @@ export function summaryTokenBudget(entries: number, words?: number | null): numb
   const perEntry = (words ?? DEFAULT_SUMMARY_WORDS) * 2;
   return Math.min(8_000, 300 + entries * perEntry);
 }
+
+/** Cards summarised per call - see withPrinciples. */
+export const PRINCIPLE_BATCH = 3;
 
 /** About 350 words: well past any length the prompt asks for. */
 const GENERATED_SUMMARY_CEILING = 2_400;

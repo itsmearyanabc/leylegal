@@ -535,6 +535,59 @@ describe('"summary in 100 words"', () => {
     expect(result.precedents[0].generated_principle).toContain('arms licence');
   });
 
+  /*
+   * The card summaries are written in batches of three, at the same time:
+   * one call writing all ten made the page wait for the tenth (latency
+   * baseline of 4 October: judgment searches p95 4.7 s, most of it this step).
+   * A batch's numbering starts at 1, and each summary must land on its own card.
+   */
+  describe('card summaries in parallel batches', () => {
+    const cards = Array.from({ length: 7 }, (_, i) =>
+      kanoonRow({
+        judgment_id: `kanoon:${900 + i}`,
+        case_title: `Petitioner ${i + 1} vs State Of Bihar`,
+        best_excerpt: `Extract of judgment ${i + 1}: the question was whether the order of the authority could stand, and the court set it aside.`,
+      }),
+    );
+
+    /** A summariser that writes, for each numbered entry it is sent, a line naming that entry's own case. */
+    function echoing(failWhen?: (content: string) => boolean) {
+      return {
+        isRouterMocked: false,
+        complete: jest.fn(async (request: { messages: { content: string }[] }) => {
+          const content = request.messages[0].content;
+          if (failWhen?.(content)) throw new Error('model unavailable');
+          const principles = [...content.matchAll(/^(\d+)\. (Petitioner \d+) vs/gm)].map((m) => ({ n: Number(m[1]), principle: `Principle of ${m[2]}.` }));
+          return { text: JSON.stringify({ principles }) };
+        }),
+      };
+    }
+
+    it('writes every card its own summary, three cards to a call', async () => {
+      const registry = echoing();
+      const { service } = build({ rows: cards, registry, enrichMax: 0 });
+
+      const result = await service.search(asked('judgments on cancellation of licence by the authority') as never);
+
+      expect(registry.complete).toHaveBeenCalledTimes(3);
+      const sent = registry.complete.mock.calls.map((c) => (c[0].messages[0].content.match(/^\d+\. /gm) ?? []).length);
+      expect(sent).toEqual([3, 3, 1]);
+      for (const p of result.precedents) {
+        expect(p.generated_principle).toBe(`Principle of ${p.case_title.replace(/ vs .*/, '')}.`);
+      }
+    });
+
+    it('loses only the failed batch’s summaries when one call fails', async () => {
+      const registry = echoing((content) => content.includes('Petitioner 4 vs'));
+      const { service } = build({ rows: cards, registry, enrichMax: 0 });
+
+      const result = await service.search(asked('judgments on cancellation of licence by the authority') as never);
+
+      const written = result.precedents.map((p) => Boolean(p.generated_principle));
+      expect(written).toEqual([true, true, true, false, false, false, true]);
+    });
+  });
+
   it('keeps both summaries on a named case when no length was asked for', async () => {
     const registry = summariser();
     const { service } = build({ rows: [mittal], header, registry });

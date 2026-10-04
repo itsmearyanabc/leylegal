@@ -87,6 +87,25 @@ export class RagService {
     private readonly statutes: StatuteFetcher,
   ) {}
 
+  /** When the judgment corpus was last found to be empty or not - read again every CORPUS_CHECK_MS. */
+  private corpusChecked: { searchable: boolean; at: number } | null = null;
+
+  /**
+   * Whether the ingested judgment corpus has anything in it. Remembered for
+   * CORPUS_CHECK_MS, so an ingest is picked up within minutes; when the check
+   * itself fails the search runs, as it always did.
+   */
+  private async corpusSearchable(): Promise<boolean> {
+    if (this.corpusChecked && Date.now() - this.corpusChecked.at < CORPUS_CHECK_MS) return this.corpusChecked.searchable;
+    try {
+      const searchable = await this.corpus.hasJudgmentChunks();
+      this.corpusChecked = { searchable, at: Date.now() };
+      return searchable;
+    } catch {
+      return true;
+    }
+  }
+
   /** Statute explanation. No case law retrieval; the acts table is authority enough. */
   async answerSectionLookup(
     intent: ClassifiedIntent,
@@ -228,17 +247,24 @@ export class RagService {
 
     onStage?.('retrieving');
     const expanded = expandQuery(intent.searchQuery);
-    const embedding = await this.embeddings.embedQuery(expanded);
 
-    const passages = await this.corpus.hybridSearch({
-      queryText: expanded,
-      embedding,
-      denseK: this.env.RAG_DENSE_TOP_K,
-      sparseK: this.env.RAG_SPARSE_TOP_K,
-      rrfK: this.env.RAG_RRF_K,
-      finalK: this.env.RAG_FINAL_TOP_K,
-      sections: intent.sectionNumber && intent.actCode ? [`${intent.actCode} ${intent.sectionNumber}`] : null,
-    });
+    // Nothing ingested to search: the dense and lexical search can only come
+    // back empty, and the question's embedding alone took most of 1.4 s of a
+    // general answer (latency baseline of 4 October). Judgments come from
+    // Indian Kanoon, not from here, so the answer is exactly what it was.
+    const searchable = await this.corpusSearchable();
+    const embedding = searchable ? await this.embeddings.embedQuery(expanded) : null;
+    const passages = searchable
+      ? await this.corpus.hybridSearch({
+          queryText: expanded,
+          embedding,
+          denseK: this.env.RAG_DENSE_TOP_K,
+          sparseK: this.env.RAG_SPARSE_TOP_K,
+          rrfK: this.env.RAG_RRF_K,
+          finalK: this.env.RAG_FINAL_TOP_K,
+          sections: intent.sectionNumber && intent.actCode ? [`${intent.actCode} ${intent.sectionNumber}`] : null,
+        })
+      : [];
 
     // Drop weak fusion scores. A passage that only just cleared the threshold
     // adds tokens and tempts the model to cite something barely relevant.
@@ -337,6 +363,7 @@ export class RagService {
     onStage?: RagProgress,
   ): Promise<RagAnswer> {
     onStage?.('generating');
+    const generating = Date.now();
     const result = await this.registry.complete({
       task: 'synthesis',
       system,
@@ -347,7 +374,19 @@ export class RagService {
 
     // Every generated answer passes through verification before anyone sees it.
     onStage?.('verifying');
+    const verifying = Date.now();
     const checked = await this.guardrails.verify(result.text, passages, intent, history);
+    this.logger.info(
+      {
+        intent: intent.intent,
+        ms: Date.now() - startedAt,
+        retrieveMs: generating - startedAt,
+        writeMs: verifying - generating,
+        checkMs: Date.now() - verifying,
+        outputTokens: result.outputTokens,
+      },
+      'Answer timings',
+    );
 
     return {
       text: checked.text,
@@ -416,6 +455,9 @@ function fixedAnswer(text: string, model: string, started: number, unavailable =
 
 /** The code that replaced each old one, for saying that a section has no counterpart in it. */
 const NEW_CODE_FOR: Record<string, string> = { IPC: 'BNS', CRPC: 'BNSS', IEA: 'BSA' };
+
+/** How long "the judgment corpus is empty" (or not) is believed before it is read again. */
+const CORPUS_CHECK_MS = 10 * 60_000;
 
 /**
  * The best full-text matches on a subject: within 30% of the top score, four

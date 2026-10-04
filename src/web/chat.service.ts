@@ -128,6 +128,7 @@ export class ChatService {
   }): AsyncGenerator<ChatEvent> {
     const question = input.question.trim();
     const user = input.user;
+    const started = Date.now();
 
     if (!question) {
       yield { type: 'error', code: 'EMPTY', message: 'Type a question first.' };
@@ -166,9 +167,14 @@ export class ChatService {
     // stored message id, which exists exactly once however many times the
     // client retries the request.
     const reference = `spend:web:${userMessage.id}`;
+    const setUp = Date.now();
 
     try {
       yield* this.answer({ user, threadId: thread.id, question, reference, stopped: input.stopped });
+      // One line per question, from the server's side: what an advocate waits
+      // for, less the network. The steps are in "Question routed" and the
+      // "Answer timings" / "Judgment search timings" lines.
+      this.logger.info({ ms: Date.now() - started, setupMs: setUp - started }, 'Question answered');
     } catch (err) {
       this.logger.error({ err, userId: user.id, threadId: thread.id }, 'Web chat answer failed');
 
@@ -209,7 +215,9 @@ export class ChatService {
     if (input.stopped?.()) return;
 
     yield { type: 'stage', stage: 'classifying' };
+    const routing = Date.now();
     const intent = await this.intents.classify(question);
+    this.logger.info({ intent: intent.intent, routeMs: Date.now() - routing }, 'Question routed');
 
     // A CNR anywhere in the message is decisive. Someone who pastes a case
     // number wants that case, whatever else the sentence around it says, and
