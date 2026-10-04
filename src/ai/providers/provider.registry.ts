@@ -179,4 +179,27 @@ export class ProviderRegistry {
       return this.mock.complete(request);
     }
   }
+
+  /**
+   * complete(), with the text so far reported as it is written - where the
+   * provider can stream. Otherwise, or if the stream fails, it is complete()
+   * exactly, with everything that already means; after a stream that failed
+   * part-way `onText('')` withdraws what it had reported.
+   */
+  async completeStreaming(request: LlmRequest, onText: (written: string) => void): Promise<LlmResult> {
+    const provider = request.task === 'synthesis' ? this.synthesis : this.router;
+    if (!provider.stream) return this.complete(request);
+
+    let reported = false;
+    try {
+      return await provider.stream(request, (written) => {
+        reported = true;
+        onText(written);
+      });
+    } catch (err) {
+      this.logger.warn({ err, provider: provider.name, task: request.task }, 'Streaming failed - answering in one piece instead');
+      if (reported) onText('');
+      return this.complete(request);
+    }
+  }
 }

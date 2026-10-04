@@ -338,6 +338,7 @@ button { cursor:pointer; }
 }
 
 /* Live progress */
+.draft { margin-bottom:12px; }
 .stages { display:flex; flex-direction:column; gap:7px; }
 .stage-line { display:flex; align-items:center; gap:9px; font-size:13.5px; color:var(--muted); }
 .stage-line.done { color:var(--dim); }

@@ -11,7 +11,7 @@ import {
   stripEllipsis,
 } from '../ai/precedents.service';
 import { ProviderRegistry } from '../ai/providers/provider.registry';
-import { RagService, RagStage } from '../ai/rag.service';
+import { RagDraft, RagService, RagStage } from '../ai/rag.service';
 import { CircuitOpenError } from '../common/circuit-breaker';
 import { getLogger } from '../common/logger';
 import { CREDIT_COST, CreditBalance, CreditsService } from '../credits/credits.service';
@@ -35,6 +35,12 @@ export type ChatEvent =
   | { type: 'thread'; threadId: string; title: string }
   | { type: 'message'; message: PublicChatMessage }
   | { type: 'stage'; stage: ChatStage }
+  /**
+   * The answer as written so far - only lines whose every reference has
+   * passed the citation check (draft-release.ts). Shown until `answer`
+   * replaces it; an empty text withdraws it.
+   */
+  | { type: 'draft'; text: string }
   | { type: 'answer'; message: PublicChatMessage; credits: CreditBalance; charged: number }
   | { type: 'error'; code: string; message: string; credits?: CreditBalance };
 
@@ -685,14 +691,14 @@ export class ChatService {
     // channel bridges that to this generator so the stages reach the browser
     // while the work is happening - see stage-channel.ts for why replaying them
     // afterwards would make the progress display a decoration.
-    const channel = new StageChannel<ChatStage>();
+    const channel = new StageChannel<ChatStage | RagDraft>();
 
     const answerPromise = this.rag.answer(
       intent,
       // The current question is appended by the pipeline, so history must stop
       // short of it - it was already persisted above.
       history.slice(0, -1).map((turn) => ({ role: turn.role, content: turn.content })),
-      (stage) => channel.push(stage),
+      (event) => channel.push(event),
     );
 
     // Closed on both settlements. Without the rejection branch a failed answer
@@ -704,8 +710,8 @@ export class ChatService {
       () => channel.close(),
     );
 
-    for await (const stage of channel) {
-      yield { type: 'stage', stage };
+    for await (const event of channel) {
+      yield typeof event === 'string' ? { type: 'stage', stage: event } : { type: 'draft', text: event.draft };
     }
 
     const answer = await answerPromise;

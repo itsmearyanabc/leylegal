@@ -151,6 +151,50 @@ export class GuardrailsService {
     };
   }
 
+  /**
+   * The finished lines of an answer still being written, checked as verify()
+   * checks the whole answer, for showing before the answer is complete.
+   *
+   * Every citation and section reference in `prefix` is looked up exactly as
+   * verify() looks it up - the same queries, the same exception for the
+   * provision the advocate asked about - and every one that fails is struck
+   * the same way, before the text is returned. So nothing is shown that the
+   * finished answer will not also show, and nothing fabricated is shown at all.
+   * The note about removed references is left to verify(), which runs on the
+   * whole answer once it is written and whose text is the one that is kept.
+   *
+   * `known` carries the verdicts across calls - "removed?" by reference - so a
+   * reference is looked up once however many drafts it appears in. A failed
+   * lookup throws: the caller stops showing drafts rather than show one
+   * unchecked.
+   */
+  async verifiedDraft(prefix: string, intent: ClassifiedIntent | undefined, known: Map<string, boolean>): Promise<string> {
+    const citations = extractCitations(prefix);
+    const statuteRefs = extractStatuteRefs(prefix);
+    const askedStatute = intent?.actCode && intent?.sectionNumber
+      ? `${intent.actCode} ${intent.sectionNumber}`.toUpperCase()
+      : null;
+
+    const newCitations = citations.filter((c) => !known.has(`c:${c}`));
+    const newRefs = statuteRefs.filter((r) => !known.has(`s:${r}`));
+    const [citationChecks, statuteChecks] = await Promise.all([
+      newCitations.length > 0 ? this.corpus.verifyCitations(newCitations) : Promise.resolve([]),
+      newRefs.length > 0 ? this.corpus.verifyStatuteRefs(newRefs) : Promise.resolve([]),
+    ]);
+    for (const check of citationChecks) known.set(`c:${check.citation}`, !check.found);
+    for (const check of statuteChecks) known.set(`s:${check.ref}`, !check.found && check.ref !== askedStatute);
+
+    // A reference the lookup did not answer for is not shown as checked.
+    if (citations.some((c) => !known.has(`c:${c}`)) || statuteRefs.some((r) => !known.has(`s:${r}`))) {
+      throw new Error('A reference in the draft was not verified');
+    }
+
+    let text = prefix;
+    for (const citation of citations) if (known.get(`c:${citation}`)) text = this.strike(text, citation);
+    for (const ref of statuteRefs) if (known.get(`s:${ref}`)) text = this.strikeStatuteRef(text, ref);
+    return text;
+  }
+
   /** Strip punctuation and case so "AIR 2018 S.C. 1234" matches "AIR 2018 SC 1234". */
   private normalise(citation: string): string {
     return citation.replace(/[^A-Za-z0-9]/g, '').toUpperCase();

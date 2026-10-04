@@ -855,7 +855,7 @@ async function submitQuestion(edit) {
   });
   renderMessages();
 
-  const live = { stages: [], done: false };
+  const live = { stages: [], done: false, draft: '' };
   renderLiveStages(live);
 
   try {
@@ -1048,6 +1048,15 @@ function handleChatEvent(event, live, turn) {
     return;
   }
 
+  // The answer as written so far: only lines whose every citation has passed
+  // the check (draft-release.ts on the server). The finished answer replaces
+  // it; an empty draft withdraws it.
+  if (event.type === 'draft') {
+    live.draft = event.text;
+    renderLiveStages(live);
+    return;
+  }
+
   if (event.type === 'answer') {
     live.done = true;
     state.messages.push(event.message);
@@ -1091,8 +1100,17 @@ function renderLiveStages(live) {
   const body = el('div', 'body');
   const stages = el('div', 'stages');
 
-  live.stages.forEach((stage, index) => {
-    const isLast = index === live.stages.length - 1;
+  // Once lines of the answer are showing, they are what is being read: the
+  // steps behind them shrink to the one still running, under the text.
+  if (live.draft) {
+    const draft = el('div', 'draft');
+    draft.innerHTML = renderRichText(live.draft);
+    body.appendChild(draft);
+  }
+  const shown = live.draft ? live.stages.slice(-1) : live.stages;
+
+  shown.forEach((stage, index) => {
+    const isLast = index === shown.length - 1;
     const line = el('div', 'stage-line' + (isLast ? '' : ' done'));
     line.appendChild(isLast ? el('div', 'spinner') : tickIcon());
     line.appendChild(el('span', null, STAGE_LABELS[stage] || stage));

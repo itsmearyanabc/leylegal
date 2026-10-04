@@ -39,6 +39,11 @@ export interface LlmResult {
 export interface LlmProvider {
   readonly name: string;
   complete(request: LlmRequest): Promise<LlmResult>;
+  /**
+   * complete(), reporting the text written so far as it arrives. Optional: a
+   * provider without it is asked with complete(), and nothing is shown early.
+   */
+  stream?(request: LlmRequest, onText: (written: string) => void): Promise<LlmResult>;
 }
 
 export interface EmbeddingProvider {

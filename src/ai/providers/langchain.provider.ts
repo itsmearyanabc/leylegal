@@ -31,8 +31,14 @@ interface ChatModelResponse {
   usage_metadata?: { input_tokens?: number; output_tokens?: number };
 }
 
+/** One piece of a streamed response; the pieces concatenate into what `invoke` returns. */
+interface ChatModelChunk extends ChatModelResponse {
+  concat(chunk: ChatModelChunk): ChatModelChunk;
+}
+
 interface InvokableChatModel {
   invoke(messages: BaseMessage[], options?: Record<string, unknown>): Promise<ChatModelResponse>;
+  stream(messages: BaseMessage[], options?: Record<string, unknown>): Promise<AsyncIterable<ChatModelChunk>>;
 }
 
 /**
@@ -176,6 +182,36 @@ export class LangChainProvider implements LlmProvider {
   }
 
   async complete(request: LlmRequest): Promise<LlmResult> {
+    const response = await this.model.invoke(this.messagesFor(request), this.optionsFor(request));
+    return this.resultOf(response);
+  }
+
+  /**
+   * complete(), reporting the text written so far after every piece of it.
+   *
+   * The same messages and options as complete() - the same request, the same
+   * model, the same settings - and the result is read from the pieces joined
+   * back together, so it is what complete() would have returned for the same
+   * generation. Only the delivery differs. See draft-release.ts for what is
+   * shown of the pieces, and when.
+   */
+  async stream(request: LlmRequest, onText: (written: string) => void): Promise<LlmResult> {
+    let whole: ChatModelChunk | null = null;
+    let written = '';
+
+    for await (const chunk of await this.model.stream(this.messagesFor(request), this.optionsFor(request))) {
+      whole = whole ? whole.concat(chunk) : chunk;
+      const piece = this.textOf(chunk.content);
+      if (piece) {
+        written += piece;
+        onText(written);
+      }
+    }
+
+    return this.resultOf(whole ?? { content: '' });
+  }
+
+  private messagesFor(request: LlmRequest): BaseMessage[] {
     const messages: BaseMessage[] = [new SystemMessage(request.system)];
 
     for (const message of request.messages) {
@@ -183,14 +219,17 @@ export class LangChainProvider implements LlmProvider {
         message.role === 'assistant' ? new AIMessage(message.content) : new HumanMessage(message.content),
       );
     }
+    return messages;
+  }
 
-    // JSON mode is requested per-call rather than baked into the model, because
-    // the same provider instance serves both JSON (intent classification) and
-    // prose (legal synthesis) requests.
-    const options = request.json ? this.jsonModeOptions() : undefined;
+  // JSON mode is requested per-call rather than baked into the model, because
+  // the same provider instance serves both JSON (intent classification) and
+  // prose (legal synthesis) requests.
+  private optionsFor(request: LlmRequest): Record<string, unknown> | undefined {
+    return request.json ? this.jsonModeOptions() : undefined;
+  }
 
-    const response = await this.model.invoke(messages, options);
-
+  private resultOf(response: ChatModelResponse): LlmResult {
     return {
       text: this.flatten(response.content),
       model: this.name,
@@ -244,5 +283,21 @@ export class LangChainProvider implements LlmProvider {
 
     this.logger.warn({ contentType: typeof content }, 'Unexpected message content shape from provider');
     return '';
+  }
+
+  /**
+   * The text of one streamed piece. Not trimmed, unlike flatten(): a piece
+   * ending in a space or a line break is part of the answer's layout.
+   */
+  private textOf(content: unknown): string {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object' && 'text' in part) return String((part as { text: unknown }).text ?? '');
+        return '';
+      })
+      .join('');
   }
 }

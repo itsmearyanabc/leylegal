@@ -27,7 +27,7 @@ const dir = arg('--dir') ?? path.join(os.homedir(), '.pm2', 'logs');
 const LINES = {
   'Question answered': ['ms', 'setupMs'],
   'Question routed': ['routeMs'],
-  'Answer timings': ['ms', 'retrieveMs', 'writeMs', 'checkMs'],
+  'Answer timings': ['ms', 'retrieveMs', 'firstDraftMs', 'writeMs', 'checkMs'],
   'Judgment search timings': ['ms', 'searchMs', 'documentsMs', 'summariesMs'],
 };
 

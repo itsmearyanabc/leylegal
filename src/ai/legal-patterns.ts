@@ -348,24 +348,30 @@ export function extractCitations(text: string): string[] {
  * Extract statutory references from model output as normalised 'ACT SECTION'
  * strings, ready for verify_statute_refs().
  */
+// "Section 302 IPC" / "Section 302 of the IPC" / "Sections 302 IPC and ..."
+// `sections?` matters: an answer listing several provisions almost always
+// writes the plural, and requiring the singular missed all of them.
+// The suffix letter is adjacent to the digits for the same reason as in
+// extractSectionReference - otherwise "302 IPC" becomes section "302I".
+const STATUTE_FORWARD =
+  /\b(?:u\/s|under\s+sections?|sections?|secs?|s|orders?|o|articles?|arts?)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s*(?:of\s+(?:the\s+)?)?\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
+// "IPC Section 302" / "IPC 302"
+const STATUTE_BACKWARD =
+  /\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b\s*(sections?|secs?|s|orders?|o|articles?|arts?)?\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/gi;
+// Bare "302 IPC" with no section keyword at all. Needed for the second and
+// later items in a list - "Sections 302 IPC and 498A IPC" carries the keyword
+// only once, so without this every provision after the first goes unverified.
+const STATUTE_BARE =
+  /\b(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s+(?:of\s+(?:the\s+)?)?(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
+
+/** A fresh copy of a /g pattern, so no caller resumes another's lastIndex. */
+const fresh = (pattern: RegExp): RegExp => new RegExp(pattern.source, pattern.flags);
+
 export function extractStatuteRefs(text: string): string[] {
   const refs = new Set<string>();
-
-  // "Section 302 IPC" / "Section 302 of the IPC" / "Sections 302 IPC and ..."
-  // `sections?` matters: an answer listing several provisions almost always
-  // writes the plural, and requiring the singular missed all of them.
-  // The suffix letter is adjacent to the digits for the same reason as in
-  // extractSectionReference - otherwise "302 IPC" becomes section "302I".
-  const forward =
-    /\b(?:u\/s|under\s+sections?|sections?|secs?|s|orders?|o|articles?|arts?)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s*(?:of\s+(?:the\s+)?)?\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
-  // "IPC Section 302" / "IPC 302"
-  const backward =
-    /\b(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b\s*(sections?|secs?|s|orders?|o|articles?|arts?)?\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/gi;
-  // Bare "302 IPC" with no section keyword at all. Needed for the second and
-  // later items in a list - "Sections 302 IPC and 498A IPC" carries the keyword
-  // only once, so without this every provision after the first goes unverified.
-  const bare =
-    /\b(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)\s+(?:of\s+(?:the\s+)?)?(IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\b/gi;
+  const forward = fresh(STATUTE_FORWARD);
+  const backward = fresh(STATUTE_BACKWARD);
+  const bare = fresh(STATUTE_BARE);
 
   let match: RegExpExecArray | null;
 
@@ -386,6 +392,27 @@ export function extractStatuteRefs(text: string): string[] {
   }
 
   return [...refs];
+}
+
+/**
+ * Where in the text every case citation and statutory reference sits - the
+ * same patterns extractCitations and extractStatuteRefs read, by position.
+ *
+ * For an answer shown while it is still being written (draft-release.ts): a
+ * line is shown only when no reference runs across its end, so no reference
+ * is ever shown before the whole of it has been checked.
+ */
+export function referenceSpans(text: string): { start: number; end: number }[] {
+  const spans: { start: number; end: number }[] = [];
+  for (const pattern of [...CITATION_PATTERNS, STATUTE_FORWARD, STATUTE_BACKWARD, STATUTE_BARE]) {
+    const copy = fresh(pattern);
+    let match: RegExpExecArray | null;
+    while ((match = copy.exec(text)) !== null) {
+      spans.push({ start: match.index, end: match.index + match[0].length });
+      if (match[0].length === 0) copy.lastIndex += 1;
+    }
+  }
+  return spans;
 }
 
 /**

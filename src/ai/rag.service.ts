@@ -4,6 +4,7 @@ import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { RetrievedChunk, StatuteRow } from '../database/types';
+import { DraftReleaser } from './draft-release';
 import { EmbeddingService } from './embedding.service';
 import { GuardrailsService } from './guardrails.service';
 import { ClassifiedIntent } from './intent.service';
@@ -30,8 +31,16 @@ import { kanoonSearchLink, ProvisionTarget, provisionTarget, StatuteFetcher } fr
  */
 export type RagStage = 'retrieving' | 'generating' | 'verifying';
 
+/**
+ * The answer as written so far, its lines checked as the finished answer is
+ * checked (draft-release.ts). An empty draft withdraws the one before it.
+ */
+export interface RagDraft {
+  draft: string;
+}
+
 /** Optional progress sink. Never awaited; a slow observer must not slow the answer. */
-export type RagProgress = (stage: RagStage) => void;
+export type RagProgress = (event: RagStage | RagDraft) => void;
 
 export interface RagAnswer {
   text: string;
@@ -364,13 +373,31 @@ export class RagService {
   ): Promise<RagAnswer> {
     onStage?.('generating');
     const generating = Date.now();
-    const result = await this.registry.complete({
-      task: 'synthesis',
+    const request = {
+      task: 'synthesis' as const,
       system,
       // Prior turns first, then the current question. History is already
       // trimmed and isolated per advocate by ChatMemoryService.
-      messages: [...history, { role: 'user', content: intent.rawText }],
-    });
+      messages: [...history, { role: 'user' as const, content: intent.rawText }],
+    };
+
+    // With someone watching, the lines are shown as they are written - each one
+    // only once every reference in it has passed the same check the finished
+    // answer gets (draft-release.ts). The request is the same either way.
+    let firstDraftAt: number | null = null;
+    const drafts = onStage
+      ? new DraftReleaser(
+          (prefix, known) => this.guardrails.verifiedDraft(prefix, intent, known),
+          (draft) => {
+            firstDraftAt ??= Date.now();
+            onStage({ draft });
+          },
+        )
+      : null;
+    const result = drafts
+      ? await this.registry.completeStreaming(request, (written) => drafts.offer(written))
+      : await this.registry.complete(request);
+    await drafts?.close();
 
     // Every generated answer passes through verification before anyone sees it.
     onStage?.('verifying');
@@ -382,6 +409,8 @@ export class RagService {
         ms: Date.now() - startedAt,
         retrieveMs: generating - startedAt,
         writeMs: verifying - generating,
+        // When the advocate first saw a line of it, from when writing began.
+        firstDraftMs: firstDraftAt === null ? undefined : firstDraftAt - generating,
         checkMs: Date.now() - verifying,
         outputTokens: result.outputTokens,
       },
