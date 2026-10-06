@@ -1,0 +1,58 @@
+{
+  "_source": "Live accuracy run on leylegal.in, 6 October 2026 (release b56487c): each question's rewrite as the router gave it, and Indian Kanoon rows the answer listed - [judgment id, title, date, court]: all ten of P1's in the order shown, and for the others only the rows these tests use. citedBy: Indian Kanoon's 'Cited by' count for the same documents on indiankanoon.org, 6 October 2026.",
+  "P1": {
+    "rawText": "Supreme Court guidelines on arrest for offences punishable with imprisonment up to 7 years",
+    "searchQuery": "Supreme Court guidelines on arrest for offences punishable with imprisonment up to 7 years",
+    "rows": [
+      ["kanoon:7148380", "Satender Kumar Antil vs Central Bureau Of Investigation", "2022-07-11", "Supreme Court of India"],
+      ["kanoon:123660783", "Sushila Aggarwal vs State (Nct Of Delhi)", "2020-01-29", "Supreme Court of India"],
+      ["kanoon:123238150", "Federation Of Obstetrics And vs Union Of India", "2019-05-03", "Supreme Court of India"],
+      ["kanoon:69624144", "Ms. Eera Through Dr. Manjula vs State (Govt. Of Nct Of Delhi)", "2017-07-21", "Supreme Court of India"],
+      ["kanoon:50602236", "Union Of India vs V. Sriharan @ ,Murugan & Ors", "2015-12-02", "Supreme Court of India"],
+      ["kanoon:8766447", "Ajay Kumar Choudhary vs Union Of India Thr Its Secretary & Anr", "2015-02-16", "Supreme Court of India"],
+      ["kanoon:10239019", "Lalita Kumari vs Govt.Of U.P.& Ors", "2013-11-12", "Supreme Court of India"],
+      ["kanoon:1563495", "Sanjay Chandra vs Cbi", "2011-11-23", "Supreme Court of India"],
+      ["kanoon:1108032", "Siddharam Satlingappa Mhetre vs State Of Maharashtra And Ors", "2010-12-02", "Supreme Court of India"],
+      ["kanoon:1308768", "Gurbaksh Singh Sibbia Etc vs State Of Punjab", "1980-04-09", "Supreme Court of India"]
+    ]
+  },
+  "P10": {
+    "rawText": "दहेज प्रताड़ना (498A) के मामले में गिरफ्तारी से पहले पुलिस को क्या करना चाहिए? सुप्रीम कोर्ट का फैसला बताइए",
+    "searchQuery": "Supreme Court judgment regarding what police should do before arrest in dowry harassment cases under Section 498A."
+  },
+  "NP1": {
+    "rawText": "Can a High Court quash a 498A FIR on the basis of a compromise between husband and wife? Supreme Court authority",
+    "searchQuery": "Can a High Court quash a 498A FIR based on a compromise between husband and wife? Looking for Supreme Court authority on this matter."
+  },
+  "NP5": {
+    "rawText": "Can a conviction be based solely on a dying declaration without corroboration? Supreme Court Constitution Bench",
+    "searchQuery": "Can a conviction be based solely on a dying declaration without corroboration as per Supreme Court ruling?"
+  },
+  "X28": {
+    "rawText": "Supreme Court judgments on compensation for custodial death",
+    "searchQuery": "Supreme Court judgments on compensation for custodial death",
+    "rows": [
+      ["kanoon:501198", "Shri D.K. Basu,Ashok K. Johri vs State Of West Bengal,State Of U.P", "1996-12-18", "Supreme Court of India"],
+      ["kanoon:1628260", "Smt. Nilabati Behera Alias Lalit Behera vs State Of Orissa And Ors", "1993-03-24", "Supreme Court of India"]
+    ]
+  },
+  "X29": {
+    "rawText": "Is a second FIR on the same incident permissible? Supreme Court",
+    "searchQuery": "Is a second FIR on the same incident permissible? Supreme Court"
+  },
+  "P11": {
+    "rawText": "Patna High Court judgments: is mutation (dakhil kharij) entry proof of title to land?",
+    "searchQuery": "Is a mutation (dakhil kharij) entry considered proof of title to land according to Patna High Court judgments?"
+  },
+  "V1": {
+    "rows": [["kanoon:2982624", "Arnesh Kumar vs State Of Bihar & Anr", "2014-07-02", "Supreme Court of India"]],
+    "citedBy": 25720
+  },
+  "X23": {
+    "rows": [
+      ["kanoon:10239019", "Lalita Kumari vs Govt.Of U.P.& Ors", "2013-11-12", "Supreme Court of India"],
+      ["kanoon:117323641", "Lalita Kumari vs Govt.Of U.P.& Ors", "2012-02-27", "Supreme Court of India"],
+      ["kanoon:23294012", "Lalita Kumari vs The Chief Secretary, Govt. Of Bihar", "2025-04-28", "Patna High Court"]
+    ]
+  }
+}

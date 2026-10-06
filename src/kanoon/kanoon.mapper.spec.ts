@@ -4,11 +4,13 @@ import {
   courtFilter,
   documentUrl,
   inferCourtType,
+  isOrder,
   parseDate,
   parseFoundCount,
   stripHtml,
   toPrecedentRow,
   toPrecedentRows,
+  withoutCourtNames,
 } from './kanoon.mapper';
 import { KanoonSearchDoc } from './kanoon.types';
 
@@ -178,6 +180,43 @@ describe('toPrecedentRow', () => {
   it('derives a descending score from rank so ordering stays meaningful', () => {
     expect(toPrecedentRow(REAL_DOC, 1, 10).score).toBeGreaterThan(toPrecedentRow(REAL_DOC, 5, 10).score);
   });
+
+  it('keeps how many judgments cite it', () => {
+    expect(row.cited_by).toBe(6);
+    expect(toPrecedentRow({ ...REAL_DOC, numcitedby: undefined }, 1, 10).cited_by).toBeNull();
+  });
+});
+
+describe('isOrder', () => {
+  it('is an order filed under the court\'s orders, not its judgments', () => {
+    expect(isOrder({ court_name: 'Supreme Court - Daily Orders' })).toBe(true);
+    expect(isOrder({ court_name: 'Patna High Court - Orders' })).toBe(true);
+    expect(isOrder({ court_name: 'Supreme Court of India' })).toBe(false);
+  });
+});
+
+/**
+ * The live test of 6 October: the rewrites the router gave, and the same
+ * Supreme Court search on Indian Kanoon with and without the court's name.
+ * "...permissible? Supreme Court" found Tata Cellular; without it, T.T. Antony.
+ */
+describe('withoutCourtNames', () => {
+  it.each([
+    ['Is a second FIR on the same incident permissible? Supreme Court', 'Is a second FIR on the same incident permissible?'],
+    [
+      'Can a High Court quash a 498A FIR based on a compromise between husband and wife? Looking for Supreme Court authority on this matter.',
+      'Can a quash a 498A FIR based on a compromise between husband and wife? Looking for authority on this matter.',
+    ],
+    ['Patna High Court judgments on dowry death conviction under Section 304B', 'judgments on dowry death conviction under Section 304B'],
+    ['judgments of the High Court of Punjab and Haryana on bail', 'judgments of on bail'],
+    ['सुप्रीम कोर्ट का फैसला बताइए', 'का फैसला बताइए'],
+  ])('%s', (text, out) => {
+    expect(withoutCourtNames(text)).toBe(out);
+  });
+
+  it('leaves a question that names no court as it was', () => {
+    expect(withoutCourtNames('bail under the Karnataka Excise Act')).toBe('bail under the Karnataka Excise Act');
+  });
 });
 
 describe('toPrecedentRows', () => {
@@ -264,6 +303,17 @@ describe('courtFilter', () => {
     expect(courtFilter('bail under the Karnataka Excise Act')).toBeNull();
     expect(courtFilter('anticipatory bail in NDPS cases')).toBeNull();
     expect(applyCourtFilter('anticipatory bail')).toBe('anticipatory bail');
+  });
+
+  it('reads the Supreme Court in Hindi (live, 6 Oct, P10)', () => {
+    expect(
+      courtFilter('दहेज प्रताड़ना (498A) के मामले में गिरफ्तारी से पहले पुलिस को क्या करना चाहिए? सुप्रीम कोर्ट का फैसला बताइए'),
+    ).toBe('supremecourt');
+    expect(courtFilter('क्या अग्रिम जमानत समय-सीमा के साथ ही दी जानी चाहिए? सुप्रीम कोर्ट की संविधान पीठ का फैसला बताइए')).toBe('supremecourt');
+  });
+
+  it('adds no second restriction to a query that has one', () => {
+    expect(applyCourtFilter('Is a second FIR permissible doctypes:supremecourt')).toBe('Is a second FIR permissible doctypes:supremecourt');
   });
 
   it('leaves a court with no documented slug unfiltered rather than guessing', () => {

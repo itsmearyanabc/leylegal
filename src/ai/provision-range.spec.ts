@@ -53,3 +53,30 @@ describe('a provision past the end of its Act', () => {
     expect(nonexistentProvision('BNS', 'the one about theft')).toBeNull();
   });
 });
+
+/**
+ * The 2023 codes have no lettered sections: 0021_official_statute_text.sql
+ * loads every BNS, BNSS and BSA section from the Gazette, numbered 1 to N.
+ * "Patna High Court judgments on dowry death conviction under Section 304B"
+ * was searched on Kanoon as BNS 304B and found one stray writ (live, 6 Oct, X30).
+ */
+describe('a lettered section in a 2023 code', () => {
+  it('does not exist, and the old code it comes from is named', () => {
+    const answer = nonexistentProvision('BNS', '304B');
+    expect(answer).toContain('*Section 304B of the Bharatiya Nyaya Sanhita (BNS)* does not exist');
+    expect(answer).toContain('no lettered sections - numbers like 304B come from the IPC');
+    expect(answer).toContain('*Section 304B IPC*');
+    expect(nonexistentProvision('BNSS', '41A')).toContain('come from the CrPC');
+    expect(nonexistentProvision('BSA', '65B')).toContain('come from the Evidence Act');
+  });
+
+  it('is told apart from a sub-section', () => {
+    expect(nonexistentProvision('BNSS', '35(3)')).toBeNull();
+    expect(nonexistentProvision('BNS', '103(2)')).toBeNull();
+    expect(nonexistentProvision('BNSS', '173')).toBeNull();
+  });
+
+  it('is still a section of the old code', () => {
+    expect(nonexistentProvision('IPC', '304B')).toBeNull();
+  });
+});

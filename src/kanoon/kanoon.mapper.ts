@@ -293,7 +293,7 @@ export function courtFilter(query: string): string | null {
   // 2. Every High Court.
   if (/\b(?:all\s+(?:the\s+)?)?high\s+courts\b/.test(text)) return 'highcourts';
 
-  const namesCourt = /\b(high\s+court|hc|supreme\s+court|apex\s+court)\b/.test(text);
+  const namesCourt = /\b(high\s+court|hc|supreme\s+court|apex\s+court)\b/.test(text) || HINDI_SUPREME_COURT.test(text);
   if (!namesCourt) return null;
 
   // 3. The name that qualifies "High Court" - before it, or after "High Court of".
@@ -310,7 +310,7 @@ export function courtFilter(query: string): string | null {
   if (adjacent.length > 0) return adjacent[0].entry.slug;
 
   // The Supreme Court is named by its own words, never by a state.
-  if (/\b(supreme|apex)\s+court\b/.test(text)) return 'supremecourt';
+  if (/\b(supreme|apex)\s+court\b/.test(text) || HINDI_SUPREME_COURT.test(text)) return 'supremecourt';
 
   // 4. A court is named and a state appears somewhere near it.
   const anywhere = HIGH_COURTS.map((entry) => ({ entry, at: firstIndex(text, entry) }))
@@ -320,15 +320,68 @@ export function courtFilter(query: string): string | null {
 }
 
 /**
- * Add the court restriction to the query Kanoon receives.
+ * The Supreme Court as a question in Hindi names it.
  *
- * The court words are left in the text rather than stripped: they are also
- * useful relevance signal, and removing them reliably from free-form English is
- * more likely to mangle the question than to help it.
+ * "दहेज प्रताड़ना (498A) के मामले में ... सुप्रीम कोर्ट का फैसला बताइए" asked for
+ * the Supreme Court and got five Delhi High Court judgments first: no court was
+ * read out of the Hindi, so the advocate's own High Court was promoted above
+ * the one they named (live test, 6 Oct, P10).
+ */
+const HINDI_SUPREME_COURT = /सुप्रीम\s*कोर्ट|सर्वोच्च\s+न्यायालय|उच्चतम\s+न्यायालय/;
+
+/**
+ * Add the court restriction to the query Kanoon receives, unless it already
+ * has one.
  */
 export function applyCourtFilter(query: string): string {
+  if (/\bdoctypes:/i.test(query)) return query;
   const slug = courtFilter(query);
   return slug ? `${query} doctypes:${slug}` : query;
+}
+
+/**
+ * The question without the names of courts, for a topic search whose court is
+ * already a `doctypes:` restriction.
+ *
+ * ## Why
+ *
+ * A court's name in the text is scored like any other words, and the judgments
+ * that use them most are not the ones on the point. Live test of 6 October,
+ * the same Supreme Court search on Indian Kanoon:
+ *
+ *   "Is a second FIR on the same incident permissible? Supreme Court"
+ *     -> Dilip Paul, Gian Singh, Mhetre, Lalita Kumari, ... Tata Cellular
+ *   "Is a second FIR on the same incident permissible"
+ *     -> Babubhai, T.T. Antony (the leading judgment), Amitbhai Shah, ...
+ *
+ * and "Can a conviction be based solely on a dying declaration without
+ * corroboration as per Supreme Court ruling?" returned Mhetre, S.P. Gupta and
+ * Nalini; without the court and "as per ... ruling", Uttam, Paniben and Bhajju
+ * came first. A named case was fixed the same way before (see kanoonQueries):
+ * the court narrows by operator, never by its name.
+ */
+export function withoutCourtNames(text: string): string {
+  const names = HIGH_COURTS.slice(1)
+    .flatMap((entry) => entry.names)
+    .map(namePattern)
+    .join('|');
+  return text
+    .replace(/(?<![a-z])(?:the\s+)?(?:hon'?ble\s+)?(?:supreme|apex)\s+court(?:\s+of\s+india)?(?:'s)?(?![a-z])/gi, ' ')
+    .replace(new RegExp(HINDI_SUPREME_COURT.source, 'g'), ' ')
+    .replace(
+      new RegExp(
+        `(?<![a-z])(?:the\\s+)?(?:(?:${names})\\s+)?(?:high\\s+courts?|hc)(?:\\s+(?:of|at)\\s+(?:the\\s+state\\s+of\\s+)?(?:${names}))?(?![a-z])`,
+        'gi',
+      ),
+      ' ',
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** An order in a matter rather than its judgment: Kanoon files them as "Supreme Court - Daily Orders", "Patna High Court - Orders". */
+export function isOrder(row: Pick<PrecedentRow, 'court_name'>): boolean {
+  return /\b(daily\s+)?orders\s*$/i.test(row.court_name ?? '');
 }
 
 /**
@@ -387,6 +440,9 @@ export function toPrecedentRow(
     score: 1 / (relevanceRank + 1),
     relevance_rank: relevanceRank,
     total_matches: totalMatches,
+    // How many judgments cite this one: of two copies of the same judgment,
+    // the one the courts actually cite.
+    cited_by: typeof doc.numcitedby === 'number' ? doc.numcitedby : null,
   };
 }
 

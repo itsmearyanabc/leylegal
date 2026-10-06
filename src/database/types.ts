@@ -210,6 +210,12 @@ export interface PrecedentRow {
    * limit and bury the list they are meant to describe. One card, one summary.
    */
   generated_summary?: string | null;
+
+  /**
+   * How many judgments cite this one, from Indian Kanoon's `numcitedby`.
+   * Not a column; absent on corpus rows and on searches cached before it was kept.
+   */
+  cited_by?: number | null;
 }
 
 /**

@@ -15,6 +15,7 @@ import { ActCode } from './legal-patterns';
  * Evidence Act 65B, Article 21A) sit inside the range, so a lettered number is
  * judged by its numeric part, and nothing inside the range is ever refused
  * here - whether such a section exists is left to the corpus and the model.
+ * The one exception: the 2023 codes have no lettered sections at all.
  */
 const LAST_PROVISION: Partial<Record<ActCode, { last: number; unit: 'Section' | 'Order' | 'Article' }>> = {
   IPC: { last: 511, unit: 'Section' },
@@ -44,6 +45,9 @@ const FULL_NAMES: Partial<Record<ActCode, string>> = {
   CPC: 'Civil Procedure Code (CPC)',
   COI: 'Constitution of India',
 };
+
+/** The code each 2023 code replaced. */
+const OLD_CODE: Partial<Record<ActCode, ActCode>> = { BNS: 'IPC', BNSS: 'CRPC', BSA: 'IEA' };
 
 /** Acts numbered in sections, in the order an advocate would look for a lost number. */
 const SECTION_ACTS: ActCode[] = ['BNS', 'BNSS', 'BSA', 'IPC', 'CRPC', 'IEA', 'CPC'];
@@ -76,6 +80,27 @@ export function nonexistentProvision(act: ActCode | null, provision: string | nu
   if (!match || (range.unit !== 'Article' && article)) return null;
 
   const n = Number(match[1]);
+
+  /*
+   * A lettered number in a 2023 code.
+   *
+   * The BNS, BNSS and BSA number every section 1 to N, with no inserted
+   * "304B" or "41A": 0021_official_statute_text.sql loads all of them from the
+   * Gazette and the official correspondence tables, and not one base number
+   * there has a letter. "Patna High Court judgments on dowry death conviction
+   * under Section 304B" was searched on Kanoon as Section 304B of the BNS and
+   * found one stray writ petition (live test, 6 Oct, X30). It is the IPC's.
+   */
+  const lettered = /^(?:section\s+)?\d+\s*-?\s*([a-z]{1,2})\b/i.exec(text);
+  const oldCode = OLD_CODE[act];
+  if (range.unit === 'Section' && lettered && oldCode && n >= 1 && n <= range.last) {
+    const number = `${n}${lettered[1].toUpperCase()}`;
+    return [
+      `*Section ${number} of the ${FULL_NAMES[act] ?? act}* does not exist. The ${SHORT_NAMES[act]} numbers its sections 1 to ${range.last}, with no lettered sections - numbers like ${number} come from the ${SHORT_NAMES[oldCode]}.`,
+      `If you mean the ${SHORT_NAMES[oldCode]} section, ask for *Section ${number} ${SHORT_NAMES[oldCode]}* and its ${SHORT_NAMES[act]} equivalent.`,
+    ].join('\n\n');
+  }
+
   if (n >= 1 && n <= range.last) return null;
 
   const name = FULL_NAMES[act] ?? act;

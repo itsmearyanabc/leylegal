@@ -5,7 +5,7 @@ import { AppEnv } from '../config/env';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { PrecedentRow } from '../database/types';
 import { KanoonNotConfiguredError, KanoonService } from '../kanoon/kanoon.service';
-import { courtFilter } from '../kanoon/kanoon.mapper';
+import { courtFilter, isOrder, withoutCourtNames } from '../kanoon/kanoon.mapper';
 import { SettingsService } from '../settings/settings.service';
 // The formatter below emits WhatsApp markup and is only ever rendered into a
 // WhatsApp message, so sharing the closing copy is the honest dependency.
@@ -13,6 +13,14 @@ import { CAVEAT, RETURN_TO_MENU } from '../whatsapp/replies';
 import { EmbeddingService } from './embedding.service';
 import { ClassifiedIntent } from './intent.service';
 import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName, looseTitle, samePetitioner } from './case-name';
+import {
+  buildLeadingJudgmentsPrompt,
+  LeadingJudgment,
+  leadingFirst,
+  leadingJudgmentQueries,
+  parseLeadingJudgments,
+  pickLeadingJudgment,
+} from './leading-judgments';
 import { expandQuery, extractCitations } from './legal-patterns';
 import { buildCaseSummaryPrompt, buildPrincipleSummaryPrompt } from './prompts';
 import { DEFAULT_SUMMARY_WORDS, requestedWordCount, withoutLengthRequest } from './summary-length';
@@ -110,9 +118,15 @@ function display(name: CaseName): string {
   return `${name.petitioner} vs ${name.respondent}`;
 }
 
-/** An order in a matter rather than its judgment: Kanoon files them as "Supreme Court - Daily Orders", "Patna High Court - Orders". */
-function isOrder(row: PrecedentRow): boolean {
-  return /\b(daily\s+)?orders\s*$/i.test(row.court_name ?? '');
+/** How long the leading judgments may take before the search goes on without them. */
+const LEADING_BUDGET_MS = 9_000;
+
+/** One page: a title and year search finds one judgment and its copies. */
+const LEADING_SEARCH_RESULTS = 10;
+
+/** A question about a point of law - no citation and no judgment named in it. */
+function isTopicQuestion(intent: ClassifiedIntent): boolean {
+  return !extractCitations(intent.rawText)[0] && !extractCaseName(intent.rawText);
 }
 
 /** The Supreme Court above every other court. */
@@ -179,7 +193,40 @@ export function kanoonQueries(intent: ClassifiedIntent): string[] {
     return unique([court ? `${provision} doctypes:${court}` : provision, searchQuery]);
   }
 
-  return [searchQuery];
+  // 4. A topic: its words, and the court - named in the question or in the
+  // rewrite - as the operator alone (see topicQuery).
+  const scope = court ?? courtFilter(searchQuery);
+  const topic = topicQuery(searchQuery);
+  return [scope ? `${topic} doctypes:${scope}` : topic];
+}
+
+/**
+ * What asks for research and is not the research: "as per ... ruling",
+ * "looking for ... authority on this matter", "judgments on", "landmark cases".
+ * Kanoon scores every word it is sent (withoutCourtNames has the measurements).
+ */
+const RESEARCH_WORDS =
+  /\b(?:as\s+per(?:\s+the)?\s+rulings?|as\s+per|according\s+to|looking\s+for|(?:any\s+)?authorit(?:y|ies)\s+on\s+(?:this|the)\s+(?:matter|point|issue|question)|on\s+this\s+matter|(?:leading|landmark)\s+(?:cases|judg(?:e)?ments|decisions)|judg(?:e)?ments?\s+(?:on|regarding|about|relating\s+to|related\s+to|dealing\s+with|laying\s+down)|judg(?:e)?ments?(?=[\s?.!]*$)|rulings?|verdicts?)\b/gi;
+
+/**
+ * A topic question as Kanoon should be asked it: without the names of courts,
+ * which are a `doctypes:` restriction instead, and without the words that only
+ * say research is wanted.
+ *
+ * Live test of 6 October: "Is a second FIR on the same incident permissible?
+ * Supreme Court" returned Tata Cellular and Mohinder Singh Gill; the same words
+ * without "Supreme Court" put T.T. Antony second (X29).
+ */
+export function topicQuery(searchQuery: string): string {
+  const base = withoutLengthRequest(searchQuery).trim();
+  const topic = withoutCourtNames(base)
+    .replace(RESEARCH_WORDS, ' ')
+    .replace(/\?+/g, ' ')
+    .replace(/\s+([.,;:!])/g, '$1')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s.,;:!-]+|[\s.,;:!-]+$/g, '')
+    .trim();
+  return topic || base;
 }
 
 /** The first attempt - what Kanoon is asked before any fallback. */
@@ -250,6 +297,16 @@ const ACT_PHRASES: Record<string, string> = {
   COI: 'Constitution of India',
 };
 
+/** How a list of judgments is ordered - said on the page by orderingNote. */
+export interface PrecedentGrouping {
+  /** The advocate's High Court, first when the list is arranged by court. */
+  homeCourt: string | null;
+  /** False when the list is not arranged by court: newest first. */
+  byCourt?: false;
+  /** How many leading judgments open the list (leading-judgments.ts). */
+  leading?: number;
+}
+
 export interface PrecedentSearchResult {
   /** Already sorted newest-first, whichever source produced them. */
   precedents: PrecedentRow[];
@@ -273,10 +330,11 @@ export interface PrecedentSearchResult {
   namedCase?: { name: string; found: boolean };
   /**
    * Set when the list is arranged by court - the advocate's High Court, then
-   * the Supreme Court, then the rest, newest first within each. Absent for a
-   * named case, which is one judgment wherever it was decided.
+   * the Supreme Court, then the rest, newest first within each - or opens with
+   * the leading judgments. Absent for a named case, which is one judgment
+   * wherever it was decided.
    */
-  grouping?: { homeCourt: string | null };
+  grouping?: PrecedentGrouping;
   latencyMs: number;
 }
 
@@ -371,17 +429,25 @@ export class PrecedentsService {
          * one, in parallel so it costs no time, and each is cached.
          */
         const scoped = priorityQueries(intent, homeState);
-        const [found, homeRows, supremeRows] = await Promise.all([
+        // The leading judgments are looked for alongside, not after: the
+        // model's names and their title searches run while these do.
+        const [found, homeRows, supremeRows, leading] = await Promise.all([
           this.searchKanoon(intent),
           scoped?.home ? this.searchKanoonQuietly(scoped.home) : [],
           scoped?.supreme ? this.searchKanoonQuietly(scoped.supreme) : [],
+          this.leadingJudgments(intent),
         ]);
         const { precedents, namedCase } = this.forNamedCase(intent.rawText, found);
         // Promote first, enrich second. The other way round pays for documents
         // the advocate will never see and leaves the top of the page empty.
-        const ordered = scoped
-          ? arrangeByCourt({ home: homeRows, supreme: supremeRows, general: precedents }, homeState, this.maxResults)
-          : prioritiseHomeCourt(precedents, homeState);
+        const ordered = leadingFirst(
+          leading,
+          scoped
+            ? arrangeByCourt({ home: homeRows, supreme: supremeRows, general: precedents }, homeState, this.maxResults)
+            : prioritiseHomeCourt(precedents, homeState),
+          this.maxResults,
+        );
+        const byCourt: PrecedentGrouping | undefined = scoped ? { homeCourt: homeCourtName(homeState) } : undefined;
         const searchedAt = Date.now();
         const headed = await this.withHeaders(ordered);
         const headedAt = Date.now();
@@ -407,13 +473,16 @@ export class PrecedentsService {
             summariesMs: Date.now() - headedAt,
             rows: enriched.length,
             named: Boolean(namedCase),
+            leading: leading.length,
           },
           'Judgment search timings',
         );
         return {
           precedents: summary ? [{ ...enriched[0], generated_summary: summary }, ...enriched.slice(1)] : enriched,
           namedCase,
-          grouping: scoped ? { homeCourt: homeCourtName(homeState) } : undefined,
+          grouping: leading.length
+            ? { ...(byCourt ?? { homeCourt: null, byCourt: false }), leading: leading.length }
+            : byCourt,
           totalMatches: precedents[0]?.total_matches ?? precedents.length,
           // Kanoon runs its own relevance ranking; the local dense/lexical
           // distinction does not apply, so this is never a degraded state.
@@ -510,6 +579,89 @@ export class PrecedentsService {
       this.logger.warn({ err, query }, 'Court-restricted Kanoon search failed - the general results stand');
       return [];
     }
+  }
+
+  /**
+   * The leading judgments on a topic question, each one found on Indian Kanoon
+   * by its title and year (leading-judgments.ts).
+   *
+   * Only adds to the answer, so it never throws and never holds the search up
+   * past LEADING_BUDGET_MS: without it, the list is what it was before.
+   */
+  private async leadingJudgments(intent: ClassifiedIntent): Promise<PrecedentRow[]> {
+    // Unknown counts as mocked: a placeholder name is not one to look for.
+    if (!isTopicQuestion(intent) || (this.registry.isSynthesisMocked ?? true)) return [];
+
+    let timer: NodeJS.Timeout | undefined;
+    const outOfTime = new Promise<PrecedentRow[]>((resolve) => {
+      timer = setTimeout(() => {
+        this.logger.warn({ ms: LEADING_BUDGET_MS }, 'Leading judgments took too long - the search stands without them');
+        resolve([]);
+      }, LEADING_BUDGET_MS);
+    });
+    try {
+      return await Promise.race([this.findLeadingJudgments(intent), outOfTime]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async findLeadingJudgments(intent: ClassifiedIntent): Promise<PrecedentRow[]> {
+    const started = Date.now();
+    try {
+      // The court the advocate asked for, in their words or the rewrite's
+      // (a question in Hindi names it only in the rewrite).
+      const askedCourt = courtFilter(intent.rawText) ?? courtFilter(intent.searchQuery);
+      const question = intent.rawText.trim();
+      const english = withoutLengthRequest(intent.searchQuery).trim();
+
+      const result = await this.registry.complete({
+        task: 'synthesis',
+        system: buildLeadingJudgmentsPrompt(askedCourt !== null),
+        messages: [{ role: 'user', content: english && english !== question ? `${question}\n\nIn English: ${english}` : question }],
+        json: true,
+        maxTokens: 250,
+      });
+      if (result.mocked) return [];
+
+      const named = parseLeadingJudgments(result.text, new Date().getUTCFullYear());
+      const confirmed = await Promise.all(named.map((judgment) => this.confirmLeadingJudgment(judgment, askedCourt)));
+
+      const seen = new Set<string>();
+      const leading = confirmed.filter((row): row is PrecedentRow => {
+        if (!row || seen.has(row.judgment_id)) return false;
+        seen.add(row.judgment_id);
+        return true;
+      });
+
+      this.logger.info(
+        {
+          named: named.map((judgment) => `${judgment.name} (${judgment.year})`),
+          found: leading.map((row) => row.case_title),
+          ms: Date.now() - started,
+        },
+        'Leading judgments',
+      );
+      return leading;
+    } catch (err) {
+      this.logger.warn({ err }, 'Could not look for the leading judgments - the search stands without them');
+      return [];
+    }
+  }
+
+  /** One named judgment, searched by title and year; null when Kanoon has no such judgment. */
+  private async confirmLeadingJudgment(judgment: LeadingJudgment, askedCourt: string | null): Promise<PrecedentRow | null> {
+    const queries = leadingJudgmentQueries(judgment, askedCourt);
+    for (const [index, query] of queries.entries()) {
+      try {
+        const rows = await this.kanoon.search(query, LEADING_SEARCH_RESULTS);
+        const hit = pickLeadingJudgment(judgment, rows, { askedCourt, petitionerOnly: index > 0 });
+        if (hit) return hit;
+      } catch (err) {
+        this.logger.warn({ err, query }, 'Leading judgment search failed');
+      }
+    }
+    return null;
   }
 
   /**
@@ -1124,7 +1276,7 @@ export function priorityQueries(
   if (extractCitations(intent.rawText)[0] || extractCaseName(intent.rawText)) return null;
   if (courtFilter(intent.rawText)) return null;
 
-  const base = provisionPhrase(intent) ?? withoutLengthRequest(intent.searchQuery).trim();
+  const base = provisionPhrase(intent) ?? topicQuery(intent.searchQuery);
   if (!base) return null;
 
   const slug = homeCourtSlug(state);
@@ -1214,11 +1366,15 @@ export function arrangeByCourt(
  * How the list is ordered, in words - so the advocate knows the first card is
  * first because of its court, and not because it is the newest.
  */
-export function orderingNote(grouping: { homeCourt: string | null } | undefined): string {
-  if (!grouping) return 'newest first';
-  return grouping.homeCourt
-    ? `${grouping.homeCourt} first, then the Supreme Court, then other courts — newest first within each`
-    : 'Supreme Court first, then other courts — newest first within each';
+export function orderingNote(grouping: PrecedentGrouping | undefined): string {
+  const rest =
+    !grouping || grouping.byCourt === false
+      ? 'newest first'
+      : grouping.homeCourt
+        ? `${grouping.homeCourt} first, then the Supreme Court, then other courts — newest first within each`
+        : 'Supreme Court first, then other courts — newest first within each';
+  // Who chose them is said, as well as where they were found.
+  return grouping?.leading ? `leading judgments first (named by AI, each found on Indian Kanoon), then ${rest}` : rest;
 }
 
 /** Newest first by date of judgment; undated last. A copy, never in place. */
@@ -1372,7 +1528,7 @@ export function formatPrecedentPage(
     lexicalOnly?: boolean;
     source?: 'local' | 'kanoon';
     namedCase?: { name: string; found: boolean };
-    grouping?: { homeCourt: string | null };
+    grouping?: PrecedentGrouping;
   } = {},
 ): string {
   if (all.length === 0 && opts.namedCase && !opts.namedCase.found) {

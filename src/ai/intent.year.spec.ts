@@ -88,6 +88,14 @@ describe('a code the advocate did not name', () => {
     expect(intent.sectionNumber).toBe('420');
   });
 
+  it('is the old code for a lettered number, which no 2023 code has (X30, 6 Oct)', async () => {
+    const intent = await classifierSaying({ intent: 'PRECEDENT_SEARCH', section_number: '304B', act_code: 'BNS', confidence: 0.9 }).classify(
+      'Patna High Court judgments on dowry death conviction under Section 304B',
+    );
+    expect(intent.actCode).toBe('IPC');
+    expect(intent.sectionNumber).toBe('304B');
+  });
+
   it('stays as written when the advocate named it', async () => {
     const intent = await classifierSaying({ intent: 'SECTION_LOOKUP', section_number: '420', act_code: 'BNS', confidence: 0.9 }).classify(
       'BNS 420 kya hai?',
