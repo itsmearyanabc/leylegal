@@ -1,4 +1,4 @@
-import { IntentService, isYearNotSection } from './intent.service';
+import { cnrWrittenIn, IntentService, isYearNotSection } from './intent.service';
 import { recodifiedReference } from './legal-patterns';
 
 /**
@@ -139,5 +139,32 @@ describe('an Act the advocate named that is not one of the codes', () => {
     const intent = await classifierSaying({ intent: 'SECTION_LOOKUP', act_code: 'BNS', confidence: 0.9 }).classify('Under which Act is dowry death punished?');
     expect(intent.actCode).toBe('BNS');
     expect(intent.actName ?? null).toBeNull();
+  });
+});
+
+/**
+ * Live, 6 October (second run), NC1: "Check status of CNR ABCD1234" came back
+ * as CNR ABCD123400002024 - eight characters the advocate never typed - and the
+ * web search charged a credit for instructions on using eCourts.
+ */
+describe('a CNR the advocate did not write', () => {
+  it('is dropped, so the reply asks for the CNR', async () => {
+    const intent = await classifierSaying({ intent: 'CASE_STATUS', cnr_number: 'ABCD123400002024', confidence: 0.9 }).classify(
+      'Check status of CNR ABCD1234',
+    );
+    expect(intent.cnrNumber).toBeNull();
+  });
+
+  it('is kept when it was written earlier in the conversation', async () => {
+    const intent = await classifierSaying({ intent: 'CASE_STATUS', cnr_number: 'DLCT010012342024', confidence: 0.9 }).classify(
+      'agli date kab hai?',
+      [{ role: 'user', content: 'Check the status of CNR DLCT010012342024' }],
+    );
+    expect(intent.cnrNumber).toBe('DLCT010012342024');
+  });
+
+  it('is found however its separators were typed', () => {
+    expect(cnrWrittenIn('DLCT010012342024', ['CNR: dlct01-001234-2024 please'])).toBe(true);
+    expect(cnrWrittenIn('ABCD123400002024', ['Check status of CNR ABCD1234'])).toBe(false);
   });
 });

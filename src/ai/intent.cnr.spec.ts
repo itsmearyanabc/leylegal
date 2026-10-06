@@ -24,9 +24,12 @@ describe('a CNR from the router', () => {
     expect(intent.cnrNumber).toBeNull();
   });
 
-  it('is kept, normalised, when it is one', async () => {
+  it('is kept, normalised, when it is one the advocate wrote', async () => {
+    // Earlier in the conversation: a CNR written nowhere is the router's own
+    // (intent.year.spec.ts, "a CNR the advocate did not write").
     const intent = await classifierSaying({ intent: 'CASE_STATUS', cnr_number: 'dlct01-001234-2024', confidence: 0.9 }).classify(
       'what is happening in my case',
+      [{ role: 'user', content: 'my CNR is dlct01-001234-2024' }],
     );
 
     expect(intent.cnrNumber).toBe('DLCT010012342024');

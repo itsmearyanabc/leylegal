@@ -123,6 +123,19 @@ export class IntentService {
       if (classified.intent === 'GENERAL_LEGAL') classified.intent = 'CASE_STATUS';
     }
     /*
+     * A CNR is the advocate's, never the router's - the same rule as a
+     * section number below.
+     *
+     * "Check status of CNR ABCD1234" came back with cnr_number
+     * "ABCD123400002024", padded out to sixteen characters; it was looked up,
+     * and the web search charged a credit for instructions on using eCourts
+     * (live test, 6 October, NC1). A CNR written neither in the question nor
+     * earlier in the conversation is dropped, and the reply asks for the CNR.
+     */
+    if (!regexCnr && classified.cnrNumber && !cnrWrittenIn(classified.cnrNumber, [text, ...history.map((m) => m.content)])) {
+      classified.cnrNumber = null;
+    }
+    /*
      * A year is not a section.
      *
      * "Mere client par 2023 mein 420 IPC ka case hua tha" came back from the
@@ -485,6 +498,11 @@ function cnrFrom(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const cnr = String(value).toUpperCase().replace(/[\s\-_/]/g, '');
   return isValidCnr(cnr) ? cnr : null;
+}
+
+/** Whether a CNR appears in any of these texts, however its separators were typed. */
+export function cnrWrittenIn(cnr: string, texts: string[]): boolean {
+  return texts.some((t) => t.toUpperCase().replace(/[\s\-_/]/g, '').includes(cnr));
 }
 
 /** Does the question ask which provision covers something - "which section", "kaunsi dhara"? */

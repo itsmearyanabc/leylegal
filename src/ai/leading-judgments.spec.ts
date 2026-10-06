@@ -257,3 +257,12 @@ describe('a research search', () => {
     expect(complete).not.toHaveBeenCalled();
   });
 });
+
+describe('the bench, which Kanoon cannot search by', () => {
+  it('is not sent as words: NP5 in the second run of 6 October', () => {
+    expect(
+      topicQuery('Can a conviction be based solely on a dying declaration without corroboration? Supreme Court Constitution Bench ruling'),
+    ).toBe('Can a conviction be based solely on a dying declaration without corroboration');
+    expect(topicQuery('nine-judge bench on the right to privacy')).toBe('on the right to privacy');
+  });
+});

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
+import { extractCaseName, mentionsCase } from './case-name';
 
 /**
  * Unverified information from the web, when every verified source is empty.
@@ -278,7 +279,13 @@ export class WebFallbackService {
         return null;
       }
       const payload: unknown = await response.json();
-      const found = parseWebAnswer(payload);
+      const parsed = parseWebAnswer(payload);
+      // A judgment asked for by name: an answer about another case is not an
+      // answer (mentionsCase).
+      const named = kind === 'judgment' ? extractCaseName(question) : null;
+      const anotherCase = parsed !== null && named !== null && !mentionsCase(named, parsed.text);
+      if (anotherCase) this.logger.info({ kind, answer: parsed.text.slice(0, 300) }, 'Web answer dropped: it is about another case');
+      const found = anotherCase ? null : parsed;
       // An answer dropped only for admitting the case was not found is logged
       // with its opening words, so a real answer lost to admitsNotFound shows.
       const text = found ? '' : textOf(outputTexts(payload));

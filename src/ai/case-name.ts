@@ -350,6 +350,24 @@ function signal(value: string): string[] {
 }
 
 /**
+ * Whether a text is about the case named: most of the petitioner's distinctive
+ * words appear in it, and one of the respondent's when it has any.
+ *
+ * Live test of 6 October: asked "Mercy v. Mankind judgment ka ratio kya hai?",
+ * the web search answered with Shatrughan Chauhan v. Union of India - mercy
+ * petitions - without saying it had not found the case asked for (P8). "Mercy"
+ * is in that answer; "Mankind" is not. Every real web answer recorded so far
+ * names the case it is about in full, both parties.
+ */
+export function mentionsCase(name: CaseName, text: string): boolean {
+  const found = signal(text);
+  const petitioner = signal(name.petitioner);
+  const respondent = signal(name.respondent);
+  const parties = petitioner.length === 0 || overlap(petitioner, found) >= 0.5;
+  return parties && (respondent.length === 0 || overlap(respondent, found) > 0);
+}
+
+/**
  * The words of a cause title that survive Kanoon's shortening of it, for a last
  * title search: the start of the petitioner, abbreviations spelt out, and the
  * respondent's last name. Null when that is no narrower than the full title.

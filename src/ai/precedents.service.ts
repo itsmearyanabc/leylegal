@@ -202,11 +202,14 @@ export function kanoonQueries(intent: ClassifiedIntent): string[] {
 
 /**
  * What asks for research and is not the research: "as per ... ruling",
- * "looking for ... authority on this matter", "judgments on", "landmark cases".
- * Kanoon scores every word it is sent (withoutCourtNames has the measurements).
+ * "looking for ... authority on this matter", "judgments on", "landmark cases",
+ * and the bench - Kanoon cannot search by bench, and "Constitution Bench" in
+ * the text returned Mhetre and S.P. Gupta for a dying declaration question
+ * (live test, 6 Oct, NP5; without it, Uttam, Paniben and Bhajju). Kanoon scores
+ * every word it is sent (withoutCourtNames has the measurements).
  */
 const RESEARCH_WORDS =
-  /\b(?:as\s+per(?:\s+the)?\s+rulings?|as\s+per|according\s+to|looking\s+for|(?:any\s+)?authorit(?:y|ies)\s+on\s+(?:this|the)\s+(?:matter|point|issue|question)|on\s+this\s+matter|(?:leading|landmark)\s+(?:cases|judg(?:e)?ments|decisions)|judg(?:e)?ments?\s+(?:on|regarding|about|relating\s+to|related\s+to|dealing\s+with|laying\s+down)|judg(?:e)?ments?(?=[\s?.!]*$)|rulings?|verdicts?)\b/gi;
+  /\b(?:as\s+per(?:\s+the)?\s+rulings?|as\s+per|according\s+to|looking\s+for|(?:any\s+)?authorit(?:y|ies)\s+on\s+(?:this|the)\s+(?:matter|point|issue|question)|on\s+this\s+matter|(?:leading|landmark)\s+(?:cases|judg(?:e)?ments|decisions)|judg(?:e)?ments?\s+(?:on|regarding|about|relating\s+to|related\s+to|dealing\s+with|laying\s+down)|judg(?:e)?ments?(?=[\s?.!]*$)|rulings?|verdicts?|(?:constitution|larger|full|division)\s+benche?s?|(?:\d+|two|three|five|seven|nine|eleven|thirteen)[\s-]judges?\s+benche?s?)\b/gi;
 
 /**
  * A topic question as Kanoon should be asked it: without the names of courts,
