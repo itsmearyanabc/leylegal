@@ -266,3 +266,24 @@ describe('the bench, which Kanoon cannot search by', () => {
     expect(topicQuery('nine-judge bench on the right to privacy')).toBe('on the right to privacy');
   });
 });
+
+/**
+ * The model's own names, from the server log of 6 October: Kanoon's title
+ * search needs every word sent to be in the title.
+ */
+describe('a name the model wrote with "and Others" and brackets', () => {
+  it('is searched in the words Kanoon titles it with (NP6: "Sushila Aggarwal vs State (Nct Of Delhi)")', () => {
+    expect(
+      leadingJudgmentQueries({ name: 'Sushila Aggarwal and Others v. State (NCT of Delhi) and Another', year: 2020, court: null }, 'supremecourt'),
+    ).toEqual([
+      'doctypes:supremecourt fromdate: 1-1-2019 todate: 31-12-2021 title: Sushila Aggarwal State NCT of Delhi',
+      'doctypes:supremecourt fromdate: 1-1-2019 todate: 31-12-2021 title: Sushila Aggarwal',
+    ]);
+  });
+
+  it('is still matched to the title by its parties', () => {
+    const sushila: LeadingJudgment = { name: 'Sushila Aggarwal and Others v. State (NCT of Delhi) and Another', year: 2020, court: 'Supreme Court' };
+    const p1 = research.P1.rows as Fixture[];
+    expect(pickLeadingJudgment(sushila, [row(p1[1])])?.judgment_id).toBe('kanoon:123660783');
+  });
+});

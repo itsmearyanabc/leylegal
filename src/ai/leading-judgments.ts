@@ -50,6 +50,7 @@ export function buildLeadingJudgmentsPrompt(courtNamed: boolean): string {
   return `You help Indian advocates find case law. Name the leading judgments on the exact point of law in the question: the ones an experienced Indian advocate would cite first.
 
 - At most ${MAX_LEADING}. Fewer, or none, is better than a guess: name a judgment only if you are certain it exists and decides this point.
+- When the question describes one particular judgment - "the judgment that recognised the right to die with dignity" - name that judgment first.
 - The case name as it is reported, petitioner first, e.g. "Arnesh Kumar v. State of Bihar".
 - The year the judgment was delivered.
 - ${courtNamed ? 'The advocate asked for one court: name only judgments of that court.' : 'Prefer the Supreme Court of India.'}
@@ -110,9 +111,24 @@ export function leadingJudgmentQueries(judgment: LeadingJudgment, askedCourt: st
     .filter(Boolean)
     .join(' ');
 
-  const queries = [`${scope} title: ${name.petitioner} ${name.respondent}`];
-  if (!GENERIC_PARTY.test(name.petitioner)) queries.push(`${scope} title: ${name.petitioner}`);
+  const petitioner = titleWords(name.petitioner);
+  const queries = [`${scope} title: ${petitioner} ${titleWords(name.respondent)}`];
+  if (!GENERIC_PARTY.test(petitioner)) queries.push(`${scope} title: ${petitioner}`);
   return queries;
+}
+
+/**
+ * A party as Kanoon's title search can match it: every word sent must be in
+ * the title. The model named "Sushila Aggarwal and Others v. State (NCT of
+ * Delhi) and Another" (2020); Kanoon titles it "Sushila Aggarwal vs State (Nct
+ * Of Delhi)", so "and Others" and "and Another" found nothing (live, 6 Oct, NP6).
+ */
+function titleWords(party: string): string {
+  return party
+    .replace(/[()[\],;]/g, ' ')
+    .replace(/(?:\band|&)\s+(?:others|ors|another|anr)\b\.?|\b(?:ors|anr|etc)\b\.?/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
