@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { IntentService } from '../ai/intent.service';
 import { extractCnr, isValidCnr } from '../ai/legal-patterns';
-import { costLine, UnverifiedInfo, WebFallbackService } from '../ai/web-fallback';
+import { costLine, impossibleCitation, UnverifiedInfo, WebFallbackService } from '../ai/web-fallback';
 import {
   NOT_AVAILABLE,
   PrecedentsService,
@@ -564,11 +564,18 @@ export class ChatService {
     // one Kanoon call, which is cheaper than the support mail.
     let emptyReason: string | null = null;
     let unverified: UnverifiedInfo | null = null;
+    // A citation that cannot exist - a future year, an SCC volume no year has -
+    // is said to be impossible, free, and never searched for on the web, which
+    // "found" another case for it (web-fallback.ts, impossibleCitation).
+    let impossible: string | null = null;
     if (rows.length === 0 && !cases) {
+      impossible = impossibleCitation(question);
       // Nothing from Kanoon or eCourts: what the web has, apart and marked
       // unverified, for one credit (web-fallback.ts) - or the refund.
-      yield { type: 'stage', stage: 'searching-web' };
-      unverified = await this.web.find('judgment', question, intent.searchQuery);
+      if (!impossible) {
+        yield { type: 'stage', stage: 'searching-web' };
+        unverified = await this.web.find('judgment', question, intent.searchQuery);
+      }
       if (unverified) {
         charged = (await this.credits.chargeUnverified(user.id, user.role, reference)) ?? charged;
       } else {
@@ -616,7 +623,8 @@ export class ChatService {
         : emptyReason === 'no-corpus'
           ? 'No judgment database is available on this deployment yet, so there is nothing to search. ' +
             'You have not been charged.'
-          : `${missing ?? `No judgments matched "${intent.searchQuery}".`} You have not been charged.`,
+          : `${missing ?? `No judgments matched "${intent.searchQuery}".`}` +
+            `${impossible ? ` That citation cannot exist: ${impossible}.` : ''} You have not been charged.`,
       intent: 'PRECEDENT_SEARCH',
       // Every citation here came straight out of the corpus, so they are
       // verified by construction - there is nothing for the guardrail to strip

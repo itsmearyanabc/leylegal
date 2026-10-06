@@ -549,6 +549,26 @@ describe('when no verified source has the answer', () => {
     expect(answers(events)).toBe('No judgments matched "q" in Ley Legal\'s sources. 1 credit was charged for the unverified information below.');
   });
 
+  it('says a citation that cannot exist cannot exist - free, and never searched on the web (audit 4 Oct, J-FK-13)', async () => {
+    // Live, the web search said "(2022) 40 SCC 404" corresponded to another
+    // case and charged a credit for it (web-fallback.ts, impossibleCitation).
+    const webFind = jest.fn().mockResolvedValue(found);
+    const { service, credits } = build({ intent: 'PRECEDENT_SEARCH', precedents: [], webFind });
+
+    const events = await ask(service, 'Summarise (2023) 99 SCC 1');
+
+    expect(webFind).not.toHaveBeenCalled();
+    expect(credits.chargeUnverified).not.toHaveBeenCalled();
+    expect(credits.refund).toHaveBeenCalled();
+    expect(answers(events)).toBe(
+      'No judgments matched "q". That citation cannot exist: no year of the Supreme Court Cases (SCC) reports has a volume 99. ' +
+        'You have not been charged.',
+    );
+    expect(events.some((e) => e.type === 'stage' && e.stage === 'searching-web')).toBe(false);
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.charged).toBe(0);
+  });
+
   it('searches the web for a CNR eCourts has no record of, for the credit already taken', async () => {
     const webFind = jest.fn().mockResolvedValue(found);
     const { service, credits } = build({

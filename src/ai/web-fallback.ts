@@ -66,7 +66,99 @@ const INSTRUCTIONS = `You help Indian advocates. Ley Legal's verified sources - 
 - Never state a section number, case name, citation, date, party or outcome that is not in a page you cite. Do not fill gaps.
 - Answer about the case or provision asked for, and nothing else. Never offer a different case, a "similar" case or a corrected citation in its place.
 - Indian law only: leave out anything about other countries.
+- Do not name the judges or describe the bench.
 - If the pages you find do not answer the question - including when the case or citation asked for cannot be found - reply with exactly: NO_RESULT`;
+
+/**
+ * The most volumes of Supreme Court Cases (SCC) any year could have.
+ *
+ * EBC's own catalogue (June 2025) lists 15-20 volumes a year for 2009-2024 and
+ * 10 regular volumes from 2025. 25 leaves a margin, so a real citation is never
+ * refused; "(2022) 40 SCC 404" and "(2023) 99 SCC 1" still are.
+ */
+export const SCC_MAX_VOLUMES = 25;
+
+/** Law reports whose citations carry a year. */
+const REPORTER = '(?:SCC|SCR|SCALE|SCJ|JT|INSC|Cri\\.?\\s*L\\.?\\s*J|DLT|Supp)';
+
+/** The year in India, where every citation is dated. */
+function indianYear(now: Date): number {
+  return Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric' }).format(now));
+}
+
+/**
+ * Why a citation in the question cannot exist - or null when every citation in
+ * it could.
+ *
+ * ## Why
+ *
+ * Live test of 4 October 2026: asked about "(2022) 40 SCC 404", the web search
+ * answered that the citation "corresponds to" another case, and for
+ * "(2028) 1 SCC 1" it offered a different, real case instead. The rule against
+ * that in INSTRUCTIONS was already there; the model ignored it. A prompt is a
+ * request, not a check. A citation that cannot exist is now refused here,
+ * before any search, so there is nothing for the model to fill in.
+ *
+ * Only two rules, both certain: a year still in the future, and an SCC volume
+ * no year has. Anything less certain (AIR page numbers, INSC numbers) is left
+ * to the search - refusing a real citation would be its own wrong answer.
+ */
+export function impossibleCitation(text: string, now: Date = new Date()): string | null {
+  const thisYear = indianYear(now);
+
+  // (2022) 40 SCC 404  /  2022 (40) SCC 404
+  const scc = /\(\s*(\d{4})\s*\)\s*(\d{1,3})\s*SCC\b|\b(\d{4})\s*\(\s*(\d{1,3})\s*\)\s*SCC\b/gi;
+  for (const match of text.matchAll(scc)) {
+    const volume = Number(match[2] ?? match[4]);
+    if (volume > SCC_MAX_VOLUMES) {
+      return `no year of the Supreme Court Cases (SCC) reports has a volume ${volume}`;
+    }
+  }
+
+  // A year inside a citation: (2028) 1 SCC 1, AIR 2031 SC 5, 2027 INSC 12,
+  // 2029 SCC OnLine SC 3. Only next to a reporter's name, so a year in an
+  // ordinary sentence ("pending since (2027) ...") is not read as a citation.
+  const dated = new RegExp(
+    `\\(\\s*(\\d{4})\\s*\\)\\s*(?:Supp\\s*)?(?:\\(\\s*\\d+\\s*\\)\\s*)?\\d*\\s*${REPORTER}\\b` +
+      `|\\bAIR\\s+(\\d{4})\\b` +
+      `|\\b(\\d{4})\\s+(?:INSC|SCC\\s+OnLine|Supp)\\b` +
+      `|\\b(\\d{4})\\s*\\(\\s*\\d{1,3}\\s*\\)\\s*${REPORTER}\\b`,
+    'gi',
+  );
+  for (const match of text.matchAll(dated)) {
+    const year = Number(match[1] ?? match[2] ?? match[3] ?? match[4]);
+    if (year > thisYear) return `${year} is still in the future`;
+  }
+  return null;
+}
+
+/**
+ * The model saying it could not find what was asked - and then, often, going
+ * on to describe something else.
+ *
+ * Live test of 4 October 2026: "I couldn't locate a case titled 'Laxmi Narayan
+ * v. State' with the citation '(2028) 1 SCC 1.' The most recent Supreme Court
+ * case involving Laxmi Narayan is ..." and "I couldn't find a Supreme Court
+ * judgment titled 'Rajendra Kumar v Union of India' ... The citation '40 SCC
+ * 404' corresponds to ... 'Raj Kumar v Union of India'". The instructions say
+ * to answer NO_RESULT in exactly that case. An answer that admits the search
+ * failed is treated as NO_RESULT, whatever follows the admission.
+ *
+ * Narrow on purpose: first person ("I couldn't find") or about the case or
+ * citation itself, so a holding such as "the court could not find any evidence
+ * of cruelty" is not mistaken for one.
+ */
+const NOT_FOUND: RegExp[] = [
+  /\bI\s+(?:could\s*not|couldn['’]t|was\s+(?:not\s+able|unable)\s+to|am\s+(?:not\s+able|unable)\s+to|cannot|can['’]t|did\s+not|didn['’]t)\s+(?:find|locate|identify|trace|confirm|verify)\b/i,
+  /\b(?:case|judgment|judgement|citation|decision)\b[^.]{0,80}?\b(?:could\s*not|couldn['’]t|cannot|can['’]t)\s+be\s+(?:found|located|traced|identified|verified|confirmed)\b/i,
+  /\b(?:case|judgment|judgement|citation|decision)\b[^.]{0,60}?\bdoes\s+not\s+(?:appear\s+to\s+)?exist\b/i,
+  /\bno\s+(?:such\s+)?(?:record|trace)\s+of\s+(?:a|an|the|any)?\s*(?:\w+\s+){0,3}?(?:case|judgment|judgement|citation|decision)\b/i,
+  /\b(?:there\s+is\s+)?no\s+such\s+(?:case|judgment|judgement|citation|decision)\b/i,
+];
+
+export function admitsNotFound(text: string): boolean {
+  return NOT_FOUND.some((pattern) => pattern.test(text));
+}
 
 function task(kind: WebFallbackKind, question: string, detail: string | null): string {
   const asked = `The advocate asked: ${question}`;
@@ -117,7 +209,8 @@ export function parseWebAnswer(payload: unknown): UnverifiedInfo | null {
     .map((part) => (typeof part.text === 'string' ? part.text : ''))
     .join('\n')
     .trim();
-  if (!text || /\bNO_RESULT\b/.test(text)) return null;
+  // "I couldn't find X. ... Y" is NO_RESULT followed by a substitute: see admitsNotFound.
+  if (!text || /\bNO_RESULT\b/.test(text) || admitsNotFound(text)) return null;
 
   const seen = new Set<string>();
   const sources: WebSource[] = [];
@@ -150,6 +243,13 @@ export class WebFallbackService {
    */
   async find(kind: WebFallbackKind, question: string, detail: string | null = null): Promise<UnverifiedInfo | null> {
     if (!this.isEnabled) return null;
+    // A citation that cannot exist is not searched for: whatever the web
+    // "finds" for it is another case (see impossibleCitation).
+    const impossible = kind === 'judgment' ? impossibleCitation(question) : null;
+    if (impossible) {
+      this.logger.info({ kind, impossible }, 'Web search skipped: the citation cannot exist');
+      return null;
+    }
     const started = Date.now();
     const base = (this.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
 
