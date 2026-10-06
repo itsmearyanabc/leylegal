@@ -72,9 +72,10 @@ const INSTRUCTIONS = `You help Indian advocates. Ley Legal's verified sources - 
 /**
  * The most volumes of Supreme Court Cases (SCC) any year could have.
  *
- * EBC's own catalogue (June 2025) lists 15-20 volumes a year for 2009-2024 and
- * 10 regular volumes from 2025. 25 leaves a margin, so a real citation is never
- * refused; "(2022) 40 SCC 404" and "(2023) 99 SCC 1" still are.
+ * EBC's own catalogue (August 2026) lists 13-20 bound volumes a year for
+ * 2009-2024 - 20 in each year from 2019 to 2024 - and 10 for 2025 and for 2026.
+ * 25 leaves a margin, so a real citation is never refused; "(2022) 40 SCC 404"
+ * and "(2023) 99 SCC 1" still are.
  */
 export const SCC_MAX_VOLUMES = 25;
 
@@ -118,9 +119,11 @@ export function impossibleCitation(text: string, now: Date = new Date()): string
   // A year inside a citation: (2028) 1 SCC 1, AIR 2031 SC 5, 2027 INSC 12,
   // 2029 SCC OnLine SC 3. Only next to a reporter's name, so a year in an
   // ordinary sentence ("pending since (2027) ...") is not read as a citation.
+  // AIR is followed by its court and page (AIR 1962 SC 605, AIR 1962 SUPREME
+  // COURT 605): "air" before a year is a word too, as in "clean air 2030".
   const dated = new RegExp(
     `\\(\\s*(\\d{4})\\s*\\)\\s*(?:Supp\\s*)?(?:\\(\\s*\\d+\\s*\\)\\s*)?\\d*\\s*${REPORTER}\\b` +
-      `|\\bAIR\\s+(\\d{4})\\b` +
+      `|\\bAIR\\s+(\\d{4})\\s+(?:[A-Za-z][A-Za-z.&]{0,12}\\s*){1,2}\\d{1,5}\\b` +
       `|\\b(\\d{4})\\s+(?:INSC|SCC\\s+OnLine|Supp)\\b` +
       `|\\b(\\d{4})\\s*\\(\\s*\\d{1,3}\\s*\\)\\s*${REPORTER}\\b`,
     'gi',
@@ -191,24 +194,33 @@ export function webSearchRequest(model: string, kind: WebFallbackKind, question:
   };
 }
 
+type OutputText = { type: string; text?: unknown; annotations?: unknown };
+
+/** The output_text parts of the messages in a Responses API output. */
+function outputTexts(payload: unknown): OutputText[] {
+  const output = (payload as { output?: unknown })?.output;
+  if (!Array.isArray(output)) return [];
+  return output
+    .filter((item): item is { type: string; content?: unknown } => !!item && (item as { type?: unknown }).type === 'message')
+    .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+    .filter((part): part is OutputText => !!part && part.type === 'output_text');
+}
+
+function textOf(parts: OutputText[]): string {
+  return parts
+    .map((part) => (typeof part.text === 'string' ? part.text : ''))
+    .join('\n')
+    .trim();
+}
+
 /**
  * The Responses API output to text and sources - or null when it found nothing
  * it can cite. Output items: a web_search_call, then a message whose
  * output_text parts carry the text and url_citation annotations.
  */
 export function parseWebAnswer(payload: unknown): UnverifiedInfo | null {
-  const output = (payload as { output?: unknown })?.output;
-  if (!Array.isArray(output)) return null;
-
-  const parts = output
-    .filter((item): item is { type: string; content?: unknown } => !!item && (item as { type?: unknown }).type === 'message')
-    .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
-    .filter((part): part is { type: string; text?: unknown; annotations?: unknown } => !!part && part.type === 'output_text');
-
-  const text = parts
-    .map((part) => (typeof part.text === 'string' ? part.text : ''))
-    .join('\n')
-    .trim();
+  const parts = outputTexts(payload);
+  const text = textOf(parts);
   // "I couldn't find X. ... Y" is NO_RESULT followed by a substitute: see admitsNotFound.
   if (!text || /\bNO_RESULT\b/.test(text) || admitsNotFound(text)) return null;
 
@@ -265,8 +277,16 @@ export class WebFallbackService {
         this.logger.warn({ kind, status: response.status, body: body.slice(0, 300) }, 'Web search failed');
         return null;
       }
-      const found = parseWebAnswer(await response.json());
-      this.logger.info({ kind, found: found !== null, sources: found?.sources.length ?? 0, ms: Date.now() - started }, 'Web search for unverified information');
+      const payload: unknown = await response.json();
+      const found = parseWebAnswer(payload);
+      // An answer dropped only for admitting the case was not found is logged
+      // with its opening words, so a real answer lost to admitsNotFound shows.
+      const text = found ? '' : textOf(outputTexts(payload));
+      const droppedAsNotFound = text && !/\bNO_RESULT\b/.test(text) && admitsNotFound(text) ? text.slice(0, 300) : undefined;
+      this.logger.info(
+        { kind, found: found !== null, sources: found?.sources.length ?? 0, ms: Date.now() - started, ...(droppedAsNotFound ? { droppedAsNotFound } : {}) },
+        'Web search for unverified information',
+      );
       return found;
     } catch (err) {
       this.logger.warn({ kind, err: err instanceof Error ? err.message : String(err), ms: Date.now() - started }, 'Web search failed');

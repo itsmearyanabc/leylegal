@@ -197,6 +197,21 @@ describe('a citation that cannot exist', () => {
     expect(impossibleCitation(question, NOW)).toBeNull();
   });
 
+  it.each([
+    // Indian Kanoon's own listing for Nanavati (doc 1596139)
+    'AIR 1962 SUPREME COURT 605',
+    'air 1962 sc 605 - which case?',
+    // the citation in the web's real answer on ADM Jabalpur (live, 2 Oct)
+    'AIR 1976 SC 1207',
+  ])('reads %s as a real AIR citation, and allows it', (question) => {
+    expect(impossibleCitation(question, NOW)).toBeNull();
+    expect(impossibleCitation(question.replace(/19\d\d/, '2031'), NOW)).toBe('2031 is still in the future');
+  });
+
+  it('does not read the word "air" before a year as an AIR citation', () => {
+    expect(impossibleCitation('NGT orders on the clean air 2030 plan for Delhi', NOW)).toBeNull();
+  });
+
   it('dates the year in India: 31 December in UTC is already the next year there', () => {
     const newYearInIndia = new Date('2026-12-31T20:00:00Z');
     expect(impossibleCitation('(2027) 1 SCC 1', newYearInIndia)).toBeNull();
@@ -236,6 +251,72 @@ describe('an answer that admits the case was not found', () => {
   ])('is kept when it answers: %s', (_, text) => {
     expect(admitsNotFound(text)).toBe(false);
     expect(parseWebAnswer(withText(text))?.text).toBe(text);
+  });
+});
+
+/**
+ * The web's real answers in Ley Legal's own live run of the 2 October audit,
+ * word for word from their start - the runner kept 600-700 characters, cut
+ * shorter here.
+ */
+const AUDIT_2_OCT = {
+  // NP9, asked: "Summarise the Supreme Court judgment in Ritu Malhotra v. Bar
+  // Council of Bihar, (2023) 9 SCC 1088" - an invented case, answered with another
+  ritu:
+    'I couldn\'t find any information on a Supreme Court case titled "Ritu Malhotra v. Bar Council of Bihar" with the citation "(2023) 9 SCC 1088." ' +
+    "It's possible there might be a typographical error in the case name or citation. For instance, there is a case titled \"Ritu Chhabaria v. Union of India\" " +
+    'decided on April 26, 2023, with the citation 2023 INSC 436.',
+  // P7, ADM Jabalpur - a right answer
+  admJabalpur:
+    'The Supreme Court of India delivered the judgment in Additional District Magistrate, Jabalpur v. Shivkant Shukla on April 28, 1976. ' +
+    'The case citation is AIR 1976 SC 1207. The bench comprised Chief Justice A.N. Ray and Justices M.H. Beg, Y.V. Chandrachud, P.N. Bhagwati, and Hans Raj Khanna. ' +
+    'The majority held that during the Emergency, the right to life and personal liberty under Article 21 could be suspended, and habeas corpus petitions could not be entertained.',
+  // V2, Arjun Panditrao Khotkar - a right answer
+  arjunKhotkar:
+    'In Arjun Panditrao Khotkar v. Kailash Kushanrao Gorantyal, (2020) 7 SCC 1, the Supreme Court held that a certificate under Section 65B(4) of the ' +
+    'Indian Evidence Act is mandatory for admitting electronic records as evidence. This requirement is excused only when the party seeking to produce ' +
+    'the evidence cannot obtain the certificate despite all reasonable efforts.',
+};
+
+describe("the web's real answers in the audit of 2 October", () => {
+  it('drops the invented case answered with another (NP9)', () => {
+    expect(parseWebAnswer(withText(AUDIT_2_OCT.ritu))).toBeNull();
+  });
+
+  it.each([['P7 ADM Jabalpur', AUDIT_2_OCT.admJabalpur], ['V2 Arjun Panditrao Khotkar', AUDIT_2_OCT.arjunKhotkar]])('keeps %s', (_, text) => {
+    expect(parseWebAnswer(withText(text))?.text).toBe(text);
+  });
+});
+
+describe('an answer dropped for admitting it found nothing', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+  const env = { WEB_FALLBACK: 'on', OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: '', WEB_SEARCH_MODEL: 'gpt-4.1-mini', WEB_FALLBACK_TIMEOUT_MS: 25000 } as never;
+  const NP9 = 'Summarise the Supreme Court judgment in Ritu Malhotra v. Bar Council of Bihar, (2023) 9 SCC 1088';
+
+  it('is logged with its opening words, so a real answer lost this way can be seen', async () => {
+    global.fetch = jest.fn().mockResolvedValue(new Response(JSON.stringify(withText(AUDIT_2_OCT.ritu)), { status: 200 })) as never;
+    const service = new WebFallbackService(env);
+    const info = jest.spyOn((service as unknown as { logger: { info: (...args: unknown[]) => void } }).logger, 'info');
+
+    expect(await service.find('judgment', NP9, 'Ritu Malhotra v. Bar Council of Bihar')).toBeNull();
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ found: false, droppedAsNotFound: AUDIT_2_OCT.ritu.slice(0, 300) }),
+      'Web search for unverified information',
+    );
+  });
+
+  it('is not said for NO_RESULT or for an answer that was kept', async () => {
+    for (const text of ['NO_RESULT', AUDIT_2_OCT.arjunKhotkar]) {
+      global.fetch = jest.fn().mockResolvedValue(new Response(JSON.stringify(withText(text)), { status: 200 })) as never;
+      const service = new WebFallbackService(env);
+      const info = jest.spyOn((service as unknown as { logger: { info: (...args: unknown[]) => void } }).logger, 'info');
+
+      await service.find('judgment', 'Arjun Panditrao Khotkar v. Kailash Kushanrao Gorantyal');
+      expect(info.mock.calls[0][0]).not.toHaveProperty('droppedAsNotFound');
+    }
   });
 });
 
