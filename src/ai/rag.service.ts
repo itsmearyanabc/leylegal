@@ -577,9 +577,13 @@ export class RagService {
     const answer = await this.generate(system, intent, [], statutes, started, history, onStage, {
       confirmed: judgments.flatMap((j) => [j.neutral_citation, ...(j.reporter_citations ?? [])].filter((c): c is string => !!c)),
     });
-    // Listed under the answer only when it names them.
+    // Listed under the answer only when it names them. A Kanoon title with a
+    // long respondent - "Nipun Saxena And Anr vs Union Of India Ministry Of
+    // Home Affairs And Ors" - is no cause title to extractCaseName, so it is
+    // split at "vs" instead.
     const cited = judgments.filter((j) => {
-      const name = extractCaseName(j.case_title);
+      const [petitioner, respondent = ''] = j.case_title.split(/\s+vs?\.?\s+/i);
+      const name = extractCaseName(j.case_title) ?? (petitioner ? { petitioner, respondent } : null);
       return name !== null && namesCase(name, answer.text);
     });
     return cited.length > 0 ? { ...answer, judgments: cited } : answer;

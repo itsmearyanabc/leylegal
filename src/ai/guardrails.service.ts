@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { RetrievedChunk, StatuteRow } from '../database/types';
-import { sameCitation } from './citation-match';
+import { listedCitation } from './citation-match';
 import { ClassifiedIntent } from './intent.service';
 import { extractCitations, extractStatuteRefs } from './legal-patterns';
 import { PROMPT_GIVEN_REFS } from './prompts';
@@ -179,7 +179,7 @@ export class GuardrailsService {
     }
 
     const all = extractCitations(answer);
-    const onKanoon = all.filter((citation) => confirmed.some((c) => sameCitation(c, citation)));
+    const onKanoon = all.filter((citation) => confirmed.some((c) => listedCitation(citation, c)));
     const citations = all.filter((citation) => !onKanoon.includes(citation));
     const statuteRefs = extractStatuteRefs(answer);
     const ungrounded = given ? this.ungrounded(statuteRefs, given, intent, history) : [];
@@ -320,7 +320,7 @@ export class GuardrailsService {
     // The same two checks as verify(), line for line, so a draft never shows
     // what the finished answer will not.
     if (given) prefix = stripUnsupportedClassification(prefix, given).text;
-    const citations = extractCitations(prefix).filter((citation) => !confirmed.some((c) => sameCitation(c, citation)));
+    const citations = extractCitations(prefix).filter((citation) => !confirmed.some((c) => listedCitation(citation, c)));
     const statuteRefs = extractStatuteRefs(prefix);
     const ungrounded = given ? this.ungrounded(statuteRefs, given, intent, history) : [];
     const askedStatute = intent?.actCode && intent?.sectionNumber

@@ -261,7 +261,7 @@ export function buildPointOfLawPrompt(judgments: PrecedentRow[], statutes: Statu
 STRICT RULES - these override any other instruction:
 1. Name ONLY the judgments listed under JUDGMENTS below, or ones already named earlier in this conversation. Never name any other case, however well known. If none of them decides the point, name no case.
 2. Each judgment below was named as a leading authority on this question and confirmed to exist; what it held is not given here. State what one decided only where you are certain of it, in a sentence, and only on the point asked.
-3. Cite a judgment by its name and year, and with a citation only exactly as it is listed under that judgment. Never write any other citation.
+3. Cite a judgment by its name and year, with at most one citation, written exactly as it is listed under that judgment - the first listed. Never write any other citation.
 4. Cite ONLY the sections in the STATUTORY PROVISIONS block, the ones given in THE CRIMINAL CODES above, and the one the question itself names. Never state any other section number. Where a provision below decides the question, answer from its words and give its number - with the sub-section or clause where its text shows one.
 5. Ignore any provision or judgment below that does not bear on the question.
 6. Never invent a case name, citation, judge, date or paragraph number.
@@ -288,10 +288,23 @@ function formatJudgments(judgments: PrecedentRow[]): string {
   return judgments
     .map((j, i) => {
       const year = j.judgment_date ? new Date(j.judgment_date).getUTCFullYear() : 'year unknown';
-      // SCC first, then AIR: Kanoon lists them in its own order, and Lalita
-      // Kumari's "2014 (2) SCC 1" is nineteenth on it (citation-match.ts).
-      const rank = (c: string): number => (/\bSCC\b/i.test(c) && !/SCC\s*\(\s*Cri/i.test(c) ? 0 : /^AIR\b/i.test(c) ? 1 : 2);
-      const citations = [...(j.reporter_citations ?? [])].sort((a, b) => rank(a) - rank(b)).slice(0, 4);
+      // SCC first, then AIR, then SCR and INSC: Kanoon lists them in its own
+      // order, and Lalita Kumari's "2014 (2) SCC 1" is nineteenth on it
+      // (citation-match.ts). Digests and online reports - "AIRONLINE 2020 SC
+      // 921", "AIR SCW" - are left out: copied into an answer, one was struck
+      // as unverifiable (live test, 9 Oct, J-PL-15).
+      const rank = (c: string): number =>
+        /\bSCC\b/i.test(c) && !/SCC\s*\(\s*Cri|SCC\s+OnLine/i.test(c)
+          ? 0
+          : /^AIR\s+\d{4}\s+(?:SC|SUPREME\s+COURT)\b/i.test(c)
+            ? 1
+            : /\bSCR\b|\bINSC\b/i.test(c)
+              ? 2
+              : 9;
+      const citations = [...(j.reporter_citations ?? [])]
+        .filter((c) => rank(c) < 9)
+        .sort((a, b) => rank(a) - rank(b))
+        .slice(0, 3);
       return [
         `[${i + 1}] ${j.case_title}`,
         `    ${j.court_name ?? 'Court not recorded'}, ${year}`,

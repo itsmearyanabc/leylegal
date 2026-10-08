@@ -1,4 +1,5 @@
 import { PrecedentRow, StatuteRow } from '../database/types';
+import { listedCitation } from './citation-match';
 import { GuardrailsService } from './guardrails.service';
 import { asksForCounterpart, RagService } from './rag.service';
 
@@ -215,5 +216,49 @@ describe('a citation Kanoon prints on a judgment the model was given', () => {
     const report = await guardrails.verify(text, [], undefined, [], undefined, ['AIR 2017 SUPREME COURT 4609']);
     expect(report.text).toContain('[unverified]');
     expect(report.removed).toEqual(['(2017) 9 SCC 1']);
+  });
+});
+
+/** Live test of 9 Oct, on release 9fe6aef. */
+describe('what the 9 October run showed', () => {
+  it('keeps a Kanoon citation the answer copied in an online-report form (J-PL-15, J-PL-51)', async () => {
+    // "(AIRONLINE 2020 SC 929)" was read as "2020 SC 929", not found in the
+    // corpus, and struck: "Vidya Drolia vs Durga Trading Corporation (AIRONLINE [unverified])".
+    const corpus = {
+      verifyCitations: jest.fn(async (citations: string[]) => citations.map((citation) => ({ citation, found: false }))),
+      verifyStatuteRefs: jest.fn(async (refs: string[]) => refs.map((ref) => ({ ref, found: true }))),
+    };
+    const text = '*Vidya Drolia vs Durga Trading Corporation* (AIRONLINE 2020 SC 929) sets the test.';
+    const report = await new GuardrailsService(corpus as never).verify(text, [], undefined, [], undefined, ['AIRONLINE 2020 SC 929']);
+    expect(report.text).toBe(text);
+    expect(report.removed).toEqual([]);
+  });
+
+  it('matches a citation to a listed one by its whole tail only', () => {
+    expect(listedCitation('2020 SC 929', 'AIRONLINE 2020 SC 929')).toBe(true);
+    expect(listedCitation('(2014) 2 SCC 1', '2014 (2) SCC 1')).toBe(true);
+    expect(listedCitation('2014 SC 1', 'AIR 2014 SC 10')).toBe(false);
+    expect(listedCitation('SC 929', 'AIRONLINE 2020 SC 929')).toBe(false);
+  });
+
+  it('gives the model the standard reports only, SCC first (Kanoon\'s list for Nilabati Behera, 9 Oct)', async () => {
+    const nilabati = judgment('1628260', 'Smt. Nilabati Behera Alias Lalit Behera vs State Of Orissa And Ors', '1993-03-24', [
+      '1993 AIR 1960', '1993 SCR (2) 581', 'AIR 1993 SUPREME COURT 1960', '1993 (2) SCC 746', '1993 AIR SCW 2366', '1993 SCC(CRI) 527', '1993 IJR 222',
+    ]);
+    const { rag, registry } = build({ judgments: [nilabati] });
+
+    await rag.answer(intent({ rawText: 'Compensation for custodial death under Article 32?' }) as never);
+
+    expect(system(registry)).toContain('Citations: 1993 (2) SCC 746; AIR 1993 SUPREME COURT 1960; 1993 SCR (2) 581');
+    expect(system(registry)).not.toContain('AIR SCW');
+  });
+
+  it('lists a judgment whose Kanoon title has a long respondent (J-PL-19)', async () => {
+    const nipun = judgment('100004', 'Nipun Saxena And Anr vs Union Of India Ministry Of Home Affairs And Ors', '2018-12-11', []);
+    const { rag } = build({ judgments: [nipun], model: 'No. This principle was reinforced in *Nipun Saxena vs Union Of India* (2018).' });
+
+    const answer = await rag.answer(intent({ rawText: 'Can the media disclose the identity of a rape victim?' }) as never);
+
+    expect(answer.judgments?.map((j) => j.judgment_id)).toEqual(['kanoon:100004']);
   });
 });

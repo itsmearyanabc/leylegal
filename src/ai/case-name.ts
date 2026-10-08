@@ -380,7 +380,12 @@ export function mentionsCase(name: CaseName, text: string): boolean {
 export function namesCase(name: CaseName, text: string): boolean {
   const petitioner = signal(name.petitioner);
   if (petitioner.length === 0) return false;
-  return signal(text).some((word) => sameName(petitioner[0], word)) && mentionsCase(name, text);
+  const found = signal(text);
+  if (!found.some((word) => sameName(petitioner[0], word))) return false;
+  // A petitioner of two words or more named in full is enough: Kanoon's
+  // respondent runs on - "Union Of India Ministry Of Home Affairs And Ors" -
+  // where an answer writes "Union of India", which is all noise words.
+  return mentionsCase(name, text) || (petitioner.length >= 2 && overlap(petitioner, found) === 1);
 }
 
 /**

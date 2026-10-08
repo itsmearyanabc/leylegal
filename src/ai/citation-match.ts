@@ -83,6 +83,21 @@ export function sameCitation(a: string, b: string): boolean {
 }
 
 /**
+ * Whether a citation in an answer is one Kanoon lists for a judgment - the
+ * same report in any spelling, or the whole of its tail: an answer that copied
+ * "AIRONLINE 2020 SC 921" is read as "2020 SC 921", which was then struck,
+ * leaving "AIRONLINE [unverified]" (live test, 9 Oct, J-PL-15). Word for word
+ * from the end, so "2014 SC 1" is not "AIR 2014 SC 10".
+ */
+export function listedCitation(written: string, listed: string): boolean {
+  if (sameCitation(written, listed)) return true;
+  const words = (c: string) => c.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+  const w = words(written);
+  const l = words(listed);
+  return w.length >= 3 && w.length < l.length && l.slice(l.length - w.length).join(' ') === w.join(' ');
+}
+
+/**
  * The `cite:` operands worth sending, in order: Kanoon's own spelling first,
  * then the advocate's, without repeats.
  */
