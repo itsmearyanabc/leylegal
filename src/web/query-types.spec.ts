@@ -690,3 +690,87 @@ describe('section lookup replies that deliver no research (Fix 2)', () => {
     expect((answer?.message.structured as { statutes: { sectionNumber: string }[] }).statutes.map((s) => s.sectionNumber)).toEqual(['316']);
   });
 });
+
+/** Live test of 8 October 2026: what the release that day got wrong, on the web side. */
+describe('the 8 October fixes', () => {
+  it('says a citation that cannot exist cannot exist, beside a case name too - free, no eCourts, no web (J-FK-10)', async () => {
+    // Four High Court cases of other Laxmi Narayans were shown, for two credits.
+    const webFind = jest.fn();
+    const casesForQuestion = jest.fn();
+    const { service, precedents, credits } = build({ intent: 'PRECEDENT_SEARCH', webFind, casesForQuestion });
+    precedents.search.mockResolvedValue({
+      precedents: [], totalMatches: 0, lexicalOnly: false, source: 'kanoon', latencyMs: 1,
+      namedCase: { name: 'Laxmi Narayan vs State', found: false },
+    });
+
+    const events = await ask(service, 'Give the ratio of Laxmi Narayan v. State, (2028) 1 SCC 1');
+
+    expect(casesForQuestion).not.toHaveBeenCalled();
+    expect(webFind).not.toHaveBeenCalled();
+    expect(credits.refund).toHaveBeenCalled();
+    expect(answers(events)).toBe(
+      'No judgment found for "Laxmi Narayan vs State" in Ley Legal\'s sources. Check the party names or the citation, or describe the point of law instead. ' +
+        'That citation cannot exist: 2028 is still in the future. You have not been charged.',
+    );
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.charged).toBe(0);
+  });
+
+  it('says judgment search is unavailable when Kanoon cannot be reached, and refunds (7 Oct outage)', async () => {
+    const webFind = jest.fn();
+    const casesForQuestion = jest.fn();
+    const { service, precedents, credits } = build({ intent: 'PRECEDENT_SEARCH', webFind, casesForQuestion });
+    precedents.search.mockResolvedValue({ precedents: [], unavailable: true, totalMatches: 0, lexicalOnly: false, source: 'kanoon', latencyMs: 1 });
+
+    const events = await ask(service, 'Summarise Arnesh Kumar v. State of Bihar');
+
+    expect(casesForQuestion).not.toHaveBeenCalled();
+    expect(webFind).not.toHaveBeenCalled();
+    expect(credits.refund).toHaveBeenCalledWith('user-1', 'GUEST_LAWYER', expect.any(String), 'Judgment search unavailable');
+    expect(answers(events)).toBe(
+      'Judgment search is not available right now: Indian Kanoon, where Ley Legal looks for judgments, is not responding, ' +
+        'so nothing was searched. You have not been charged. Please ask again in a few minutes.',
+    );
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.charged).toBe(0);
+  });
+
+  it.each([
+    ['Give me 10 MCQs on BNSS for judiciary prelims.', /^Practice questions and MCQs are not live in Ley Legal yet/], // S-MT-05
+    ['Track all my cases automatically', /^Ley Legal does not track cases or send hearing alerts/], // C-19
+    ['Is your answer legal advice?', /^No\. Ley Legal is a research tool for advocates/], // B-13
+  ])('answers %p with a fixed reply before charging', async (question, reply) => {
+    const { service, credits, rag } = build({ intent: 'UNSUPPORTED' });
+
+    const events = await ask(service, question);
+
+    expect(credits.spend).not.toHaveBeenCalled();
+    expect(rag.answer).not.toHaveBeenCalled();
+    expect(answers(events)).toMatch(reply);
+    expect(answers(events)).toMatch(/No credits were charged for this question\.$/);
+  });
+});
+
+describe('a CNR question with another question in it (C-15)', () => {
+  it('answers the status and says which part it did not answer', async () => {
+    const { service, credits } = build({ intent: 'CASE_STATUS', cnr: 'DLCT010012342024' });
+
+    const events = await ask(service, "CNR DLCT010012342024 — what's the status and which Arbitration Act section governs interim relief?");
+
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.message.content).toBe(
+      'Case status for DLCT010012342024\n\nYour message also asked: "which Arbitration Act section governs interim relief?" ' +
+        'This reply covers only the case status - send that question on its own and Ley Legal will answer it.',
+    );
+    expect((answer?.message.structured as { note?: string }).note).toMatch(/^Your message also asked/);
+    expect(charged(credits)).toEqual({ action: 'CASE_STATUS', cost: CREDIT_COST.CASE_STATUS });
+  });
+
+  it('adds nothing to a plain status question', async () => {
+    const { service } = build({ intent: 'CASE_STATUS', cnr: 'DLCT010012342024' });
+
+    const events = await ask(service, 'Check the status of CNR DLCT010012342024');
+
+    expect(answers(events)).toBe('Case status for DLCT010012342024');
+  });
+});

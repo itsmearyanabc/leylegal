@@ -37,6 +37,9 @@ import { parseJsonLoose } from './providers/llm-provider.interface';
 /** At most this many: the leading authorities, not a second list. */
 export const MAX_LEADING = 3;
 
+/** The earliest year a judgment named is believed: the Privy Council and the old High Courts are on Kanoon. */
+const EARLIEST_YEAR = 1860;
+
 export interface LeadingJudgment {
   /** As reported, petitioner first: "Arnesh Kumar v. State of Bihar". */
   name: string;
@@ -53,10 +56,64 @@ export function buildLeadingJudgmentsPrompt(courtNamed: boolean): string {
 - When the question describes one particular judgment - "the judgment that recognised the right to die with dignity" - name that judgment first.
 - The case name as it is reported, petitioner first, e.g. "Arnesh Kumar v. State of Bihar".
 - The year the judgment was delivered.
-- ${courtNamed ? 'The advocate asked for one court: name only judgments of that court.' : 'Prefer the Supreme Court of India.'}
+- ${courtNamed ? 'The advocate asked for one court: name only judgments of that court.' : 'Prefer the Supreme Court of India - unless the question names another court, such as the Privy Council: then name only that court\'s judgments.'}
 - Never invent a case, a party or a year.
 
 Reply with JSON only: {"cases": [{"name": "...", "year": 2014, "court": "Supreme Court"}]}`;
+}
+
+/**
+ * "Is X still good law?" - the later judgment that overruled X, if the model
+ * is certain of one. What it names is then found on Kanoon and read
+ * (precedents.service.ts, overruledBy); nothing it writes is shown as a fact.
+ */
+export function buildOverruledByPrompt(title: string, court: string | null, year: number | null): string {
+  return `You help Indian advocates check whether a judgment is still good law.
+
+The judgment: "${title}"${court ? `, ${court}` : ''}${year ? `, ${year}` : ''}.
+
+Has it been overruled - wholly, or on the point in the question - by a later judgment of a larger bench or a higher court?
+- Name only the later judgment that overruled it: the case name as reported, petitioner first, the year it was delivered, and its court.
+- At most 2. If it has not been overruled, or you are not certain, reply with an empty list. A guess is worse than an empty list.
+- Never invent a case, a party or a year.
+
+Reply with JSON only: {"cases": [{"name": "...", "year": 2020, "court": "Supreme Court"}]}`;
+}
+
+/** "Is Suresh Kumar Koushal v. Naz Foundation still good law?" */
+export function asksIfStillGoodLaw(text: string): boolean {
+  return /\bgood\s+law\b|\boverruled\b|\bstill\s+(?:valid|binding|holds?|applies|applicable|the\s+law)\b/i.test(text);
+}
+
+/**
+ * Whether a judgment's text says the earlier one was overruled: the earlier
+ * petitioner's longest name word, and "overruled" or "not good law" (or the
+ * like) within a few hundred characters of it, with most of the petitioner's
+ * words there too.
+ *
+ * Arjun Panditrao Khotkar (2020): "Shafhi Mohammad (supra) ... do not lay down
+ * the law correctly and are therefore overruled"; Navtej Singh Johar (2018):
+ * "Suresh Kumar Koushal ... is hereby overruled"; Sita Soren (2024): "the
+ * judgment of the majority in P V Narasimha Rao ... is overruled".
+ */
+export function textOverrules(html: string, earlierPetitionerWords: string[]): boolean {
+  const words = earlierPetitionerWords.map((w) => w.toLowerCase().replace(/[^a-z]/g, '')).filter((w) => w.length >= 3);
+  if (words.length === 0) return false;
+  const text = html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  const anchor = [...words].sort((a, b) => b.length - a.length)[0];
+  // Said, not denied: "is hereby overruled", "are therefore overruled" - never
+  // "has not been overruled" or "is not overruled".
+  const OVERRULED =
+    /(?<!\bnot\s)(?<!\bnever\s)\b(?:is|are|was|were|stands?|be|been|hereby|therefore|accordingly|thus)\s+(?:hereby\s+|therefore\s+|accordingly\s+|expressly\s+)?overruled\b|\boverrul(?:e|es|ing)\s+(?:the\s+)?(?:said\s+)?(?:decision|judgment|view|ratio)\b|\bno\s+longer\s+good\s+law\b|\bis\s+not\s+(?:a\s+)?good\s+law\b|\bdo(?:es)?\s+not\s+lay\s+down\s+the\s+(?:correct\s+)?law\b|\bwrongly\s+decided\b/;
+  for (let at = text.indexOf(anchor); at !== -1; at = text.indexOf(anchor, at + anchor.length)) {
+    const window = text.slice(Math.max(0, at - 600), at + 600);
+    if (OVERRULED.test(window) && words.filter((w) => window.includes(w)).length >= Math.ceil(words.length / 2)) return true;
+  }
+  return false;
 }
 
 /** The model's answer, with anything that is not a dated cause title dropped. */
@@ -73,7 +130,11 @@ export function parseLeadingJudgments(text: string, thisYear: number): LeadingJu
     const court = typeof entry.court === 'string' && entry.court.trim() ? entry.court.trim() : null;
 
     if (!name || !extractCaseName(name)) continue;
-    if (!Number.isInteger(year) || year < 1950 || year > thisYear) continue;
+    // From 1860, not 1950: "Which Privy Council case explains common
+    // intention?" is Mahbub Shah v. Emperor, 1945, and was dropped here - the
+    // list that followed had neither it nor Barendra Kumar Ghosh, 1925 (live
+    // test, 8 Oct, S-SL-20). Kanoon holds them; the title search still decides.
+    if (!Number.isInteger(year) || year < EARLIEST_YEAR || year > thisYear) continue;
     if (seen.has(name.toLowerCase())) continue;
 
     seen.add(name.toLowerCase());

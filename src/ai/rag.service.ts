@@ -1,16 +1,19 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
-import { RetrievedChunk, StatuteRow } from '../database/types';
+import { PrecedentRow, RetrievedChunk, StatuteRow } from '../database/types';
+import { extractCaseName, namesCase } from './case-name';
 import { DraftReleaser } from './draft-release';
 import { EmbeddingService } from './embedding.service';
 import { GuardrailsService } from './guardrails.service';
 import { ClassifiedIntent } from './intent.service';
 import { NEW_CRIMINAL_CODES, expandQuery, extractStatuteRefs, isHinglish, namedActs, namedOtherAct, topicQuery } from './legal-patterns';
+import { PrecedentsService } from './precedents.service';
 import {
   buildGeneralLegalPrompt,
+  buildPointOfLawPrompt,
   buildPrecedentSearchPrompt,
   buildSectionExplanationPrompt,
   buildSmallTalkPrompt,
@@ -69,6 +72,11 @@ export interface RagAnswer {
    * and never sent to the web search - there is nothing to look for.
    */
   free?: boolean;
+  /**
+   * The judgments found on Indian Kanoon that the answer names, for listing
+   * under it with their links (answerPointOfLaw). Only ones it names.
+   */
+  judgments?: PrecedentRow[];
 }
 
 /**
@@ -100,6 +108,8 @@ export class RagService {
     private readonly guardrails: GuardrailsService,
     @InjectEnv() private readonly env: AppEnv,
     private readonly statutes: StatuteFetcher,
+    /** For the leading judgments on a point of law (answerPointOfLaw). Absent, that answer is the general one. */
+    @Optional() private readonly precedents?: PrecedentsService,
   ) {}
 
   /** When the judgment corpus was last found to be empty or not - read again every CORPUS_CHECK_MS. */
@@ -207,8 +217,15 @@ export class RagService {
      */
     const collision = await this.numberCollision(intent, statutes);
     if (collision) {
-      const ids = new Set(collision.rows.map((r) => r.id));
-      statutes = [...collision.rows, ...statutes.filter((s) => !ids.has(s.id))];
+      /*
+       * Only the section the subject belongs to goes to the model. Handed BNS
+       * 302 beside BNS 103, it wrote the right line above the answer - "BNS
+       * 302 is ... The section on what you asked about is BNS 103" - and then
+       * explained BNS 302, wounding religious feelings, under all four
+       * headings; BNS 323 the same for hurt (live test, 8 Oct, T-01, T-04).
+       * What the number named is said by that line, from the table.
+       */
+      statutes = collision.rows;
     }
 
     // An old section the table maps to nothing: what the new code has that is
@@ -356,10 +373,14 @@ export class RagService {
       listed.map(({ row, from }) => `*${row.act_code} ${baseOf(row.section_number)}* ("${row.section_title}"), formerly ${from.join(' and ')}`).join('; ') +
       '.';
     const first = listed[0].row;
+    const answerAbout = `${first.act_code} Section ${baseOf(first.section_number)}`;
     return {
       rows: listed.map(({ row }) => row),
       lead,
-      asked: `${first.act_code} Section ${baseOf(first.section_number)} - the advocate wrote ${label}, which is a different provision ("${named.section_title}"); a line saying so is already printed above your answer, so do not repeat it`,
+      asked:
+        `${answerAbout}* - the advocate wrote ${label}, which is a different provision ("${named.section_title}"). ` +
+        `A line saying so is already printed above your answer: do not repeat it, and do not explain ${label}. ` +
+        `Explain *${answerAbout}`,
     };
   }
 
@@ -485,12 +506,97 @@ export class RagService {
       'Hybrid retrieval complete',
     );
 
+    // A point of law, unless it only asks where a section went - "Convert CrPC
+    // 357 to the new code" is answered from the table, as it always was.
+    if (relevant.length === 0 && intent.intent === 'GENERAL_LEGAL' && !(statutes.length > 0 && asksForCounterpart(intent.rawText))) {
+      return this.answerPointOfLaw(intent, started, history, onStage, statutes);
+    }
+
     if (relevant.length === 0 && statutes.length === 0) {
       return this.answerGeneral(intent, started, history, onStage);
     }
 
     const system = buildPrecedentSearchPrompt(relevant, statutes, intent.language);
     return this.generate(system, intent, relevant, statutes, started, history, onStage);
+  }
+
+  /**
+   * A point of law - "can a 307 case be quashed on compromise", "is community
+   * service a punishment under the BNS" - answered from the leading judgments
+   * found on Indian Kanoon and, when the question names one of the codes, the
+   * sections of the codes on its subject.
+   *
+   * These went to the general prompt, which has neither and answered from
+   * memory: no case for the 307 question (Narinder Singh), "not a punishment"
+   * for community service (BNS 4(f) says it is), "the corpus doesn't cover
+   * this" for liquidated damages (Kailash Nath) - each for two credits (live
+   * test, 8 Oct, J-PL-05, O-10, J-PL-53; client's audit, gaps 1 and 2).
+   *
+   * The judgments are named by the model and each one found on Kanoon by title
+   * and year (precedents.service.ts, authoritiesFor); the prompt allows no
+   * other case. With neither judgments nor sections found, the answer is the
+   * general one, exactly as before.
+   */
+  private async answerPointOfLaw(
+    intent: ClassifiedIntent,
+    started: number,
+    history: LlmMessage[],
+    onStage?: RagProgress,
+    /** The section the question named, as looked up by number (answerPrecedentSearch). */
+    sectionRows: StatuteRow[] = [],
+  ): Promise<RagAnswer> {
+    onStage?.('retrieving');
+    /*
+     * The named section itself, of the Act named - never a section of the
+     * same number in another Act. "Section 74 of the Contract Act" was looked
+     * up as sections numbered 74 of the codes, and answered "the corpus doesn't
+     * cover this" (live test, 8 Oct, J-PL-53).
+     */
+    const named = sectionRows.filter(
+      (s) =>
+        (s.match_type === 'EXACT' || s.match_type === 'RECODIFIED') &&
+        (intent.actCode ? true : !!intent.actName && sameAct(s.act_name, intent.actName)),
+    );
+    const [judgments, onSubject] = await Promise.all([
+      this.precedents ? this.precedents.authoritiesFor(intent).catch(() => [] as PrecedentRow[]) : Promise.resolve([] as PrecedentRow[]),
+      sectionRows.length > 0 ? Promise.resolve([] as StatuteRow[]) : this.codesOnSubject(intent).catch(() => [] as StatuteRow[]),
+    ]);
+
+    // No judgment found on Kanoon: a question that named a section is answered
+    // exactly as before, from what that lookup found.
+    if (judgments.length === 0 && sectionRows.length > 0) {
+      return this.generate(buildPrecedentSearchPrompt([], sectionRows, intent.language), intent, [], sectionRows, started, history, onStage);
+    }
+    const statutes = sectionRows.length > 0 ? named : onSubject;
+    if (judgments.length === 0 && statutes.length === 0) return this.answerGeneral(intent, started, history, onStage);
+
+    const system = buildPointOfLawPrompt(judgments, statutes, replyLanguage(intent));
+    // Section numbers are checked as the general answer's always were - that
+    // each exists - and not against what was given: a quashing answer that
+    // names CrPC 482 beside Narinder Singh is right, and would be struck.
+    const answer = await this.generate(system, intent, [], statutes, started, history, onStage, {
+      confirmed: judgments.flatMap((j) => [j.neutral_citation, ...(j.reporter_citations ?? [])].filter((c): c is string => !!c)),
+    });
+    // Listed under the answer only when it names them.
+    const cited = judgments.filter((j) => {
+      const name = extractCaseName(j.case_title);
+      return name !== null && namesCase(name, answer.text);
+    });
+    return cited.length > 0 ? { ...answer, judgments: cited } : answer;
+  }
+
+  /**
+   * The sections on a question's subject, when it names one of the six codes:
+   * "community service ... under the BNS" finds BNS 4, whose clause (f) is
+   * community service. A question that names none is not searched - the codes
+   * are not where a contract or consumer question is answered.
+   */
+  private async codesOnSubject(intent: ClassifiedIntent): Promise<StatuteRow[]> {
+    const codes = ['IPC', 'BNS', 'CRPC', 'BNSS', 'IEA', 'BSA'];
+    const named = intent.actCode && codes.includes(intent.actCode) ? intent.actCode : [...namedActs(intent.rawText)].find((act) => codes.includes(act));
+    if (!named) return [];
+    const rows = await this.onSubject({ ...intent, actCode: named as ClassifiedIntent['actCode'] });
+    return rows.length > 0 ? this.corpus.withCorrespondence(rows) : rows;
   }
 
   /** No corpus support available; the prompt bars citing anything. */
@@ -567,6 +673,8 @@ export class RagService {
       given?: StatuteRow[];
       /** A subject question: the model may answer NOT_COVERED (prompts.ts). */
       subjectOnly?: boolean;
+      /** Citations Kanoon prints on the judgments the model was given - verified by that (GuardrailsService). */
+      confirmed?: string[];
     } = {},
   ): Promise<RagAnswer> {
     const lead = opts.lead ? `${opts.lead}\n\n` : '';
@@ -586,7 +694,7 @@ export class RagService {
     let firstDraftAt: number | null = null;
     const drafts = onStage
       ? new DraftReleaser(
-          (prefix, known) => this.guardrails.verifiedDraft(prefix, intent, known, opts.given, history),
+          (prefix, known) => this.guardrails.verifiedDraft(prefix, intent, known, opts.given, history, opts.confirmed),
           (draft) => {
             firstDraftAt ??= Date.now();
             onStage({ draft: draft ? `${lead}${draft}` : draft });
@@ -601,7 +709,9 @@ export class RagService {
     // Every generated answer passes through verification before anyone sees it.
     onStage?.('verifying');
     const verifying = Date.now();
-    const checked = await this.guardrails.verify(result.text, passages, intent, history, opts.given);
+    const checked = opts.confirmed
+      ? await this.guardrails.verify(result.text, passages, intent, history, opts.given, opts.confirmed)
+      : await this.guardrails.verify(result.text, passages, intent, history, opts.given);
     this.logger.info(
       {
         intent: intent.intent,
@@ -713,6 +823,30 @@ export function subjectWords(text: string): string[] {
   return topicQuery(text)
     .split(' ')
     .filter((w) => w.length >= 3 && !GENERIC_WORDS.has(w));
+}
+
+/**
+ * Whether two names are one Act: "The Negotiable Instruments Act, 1881" and
+ * "Negotiable Instruments Act, 1881" are; the Contract Act and the BNS are not.
+ */
+function sameAct(a: string | null | undefined, b: string): boolean {
+  const norm = (name: string) =>
+    name
+      .toLowerCase()
+      .replace(/\bthe\b|[^a-z\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  return !!a && norm(a) === norm(b);
+}
+
+/**
+ * "Convert CrPC 357 to the new code", "IPC 141 ka BNS mein kaunsa section" -
+ * where a section went, which the official table answers. Not a point of law.
+ */
+export function asksForCounterpart(text: string): boolean {
+  return /\b(?:convert|new\s+code|old\s+code|new\s+criminal\s+laws?|equivalent|correspond(?:s|ing)?|counterpart|replaced\s+by|purane?|naye?)\b|\b(?:ka|ki|ke)\s+(?:bns|bnss|bsa)\s+(?:mein|me|main)\b|\b(?:bns|bnss|bsa|ipc|crpc|iea)\s+(?:mein|me|main)\s+(?:kaunsa|kaun\s*sa|konsa|kya)\b/i.test(
+    text,
+  );
 }
 
 /** "403(1)" -> "403". */

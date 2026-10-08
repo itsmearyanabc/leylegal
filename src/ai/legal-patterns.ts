@@ -395,6 +395,16 @@ const STATUTE_BARE =
 /** A fresh copy of a /g pattern, so no caller resumes another's lastIndex. */
 const fresh = (pattern: RegExp): RegExp => new RegExp(pattern.source, pattern.flags);
 
+/**
+ * Text that ends in a code's name - "IPC ", "IPC Section " - so the number
+ * after it is that code's.
+ *
+ * "IPC 326B BNS mein Section 124 ke saath correspond karta hai" was read as
+ * IPC 326B and as BNS 326B; BNS 326B does not exist, was struck, and the
+ * answer said "IPC[unverified] mein Section 124" (live test, 8 Oct, M-IPC-029).
+ */
+const ENDS_IN_CODE = /\b(?:IPC|BNS|CrPC|BNSS|IEA|BSA|CPC|COI)\s*(?:sections?|secs?|s)?\.?\s*$/i;
+
 export function extractStatuteRefs(text: string): string[] {
   const refs = new Set<string>();
   const forward = fresh(STATUTE_FORWARD);
@@ -404,6 +414,8 @@ export function extractStatuteRefs(text: string): string[] {
   let match: RegExpExecArray | null;
 
   while ((match = forward.exec(text)) !== null) {
+    // "IPC Section 326B BNS mein ..." - the number is the IPC's.
+    if (ENDS_IN_CODE.test(text.slice(0, match.index + match[0].indexOf(match[1])))) continue;
     refs.add(`${match[2].toUpperCase()} ${match[1].replace(/\s+/g, '').toUpperCase()}`);
   }
   // A year straight after a code with no "section" between them is the Act's
@@ -416,6 +428,8 @@ export function extractStatuteRefs(text: string): string[] {
   }
   while ((match = bare.exec(text)) !== null) {
     if (year.test(match[1])) continue;
+    // "IPC 326B BNS mein ..." - the number is the IPC's (ENDS_IN_CODE).
+    if (ENDS_IN_CODE.test(text.slice(0, match.index))) continue;
     refs.add(`${match[2].toUpperCase()} ${match[1].replace(/\s+/g, '').toUpperCase()}`);
   }
 

@@ -1,12 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
-import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService } from '../ai/intent.service';
+import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService, productReply } from '../ai/intent.service';
 import { extractCnr } from '../ai/legal-patterns';
-import { costLine, WebFallbackService } from '../ai/web-fallback';
+import { costLine, impossibleCitation, WebFallbackService } from '../ai/web-fallback';
 import { looksLikeCnrAttempt, looksLikeEnrolmentAttempt } from './onboarding';
 import { ChatMemoryService } from '../ai/memory/chat-memory.service';
-import { PrecedentsService, formatPrecedentPage } from '../ai/precedents.service';
+import {
+  formatPrecedentPage,
+  JUDGMENT_SEARCH_UNAVAILABLE,
+  JUDGMENT_SEARCH_UNAVAILABLE_HI,
+  PrecedentsService,
+} from '../ai/precedents.service';
 import { ProviderRegistry } from '../ai/providers/provider.registry';
 import { RagService } from '../ai/rag.service';
 import { TranscriptionService } from '../ai/transcription.service';
@@ -14,6 +19,7 @@ import { getLogger, maskPhone } from '../common/logger';
 import { AnalyticsRepository } from '../database/repositories/analytics.repository';
 import { ConversationRepository } from '../database/repositories/conversation.repository';
 import { PrecedentRow, UserRow, WhatsAppUserRow } from '../database/types';
+import { otherQuestionNote, otherQuestionWithCnr } from '../ecourts/cnr-help';
 import { CnrNotFoundError, EcourtsService } from '../ecourts/ecourts.service';
 import { CircuitOpenError } from '../common/circuit-breaker';
 import { PhoneLinkService } from '../auth/phone-link.service';
@@ -1036,10 +1042,12 @@ export class ConversationService {
       await this.users.setLanguage(user.id, intent.language);
     }
 
-    // An assignment to be written is declined, free, before anything is
-    // charged - as on the website (intent.service.ts, asksToWriteAssignment).
-    if (asksToWriteAssignment(text)) {
-      await this.api.sendText(job.from, `${ASSIGNMENT_REPLY}\n\n${costLine(0, false)}`);
+    // An assignment to be written, a feature Ley Legal does not have, a
+    // question about Ley Legal itself: a fixed reply, free, before anything is
+    // charged - as on the website (intent.service.ts, productReply).
+    const fixedReply = asksToWriteAssignment(text) ? ASSIGNMENT_REPLY : productReply(text);
+    if (fixedReply) {
+      await this.api.sendText(job.from, `${fixedReply}\n\n${costLine(0, false)}`);
       return {};
     }
 
@@ -1125,7 +1133,11 @@ export class ConversationService {
 
     try {
       const status = await this.ecourts.lookup(cnr);
-      const formattedStatus = Replies.formatCaseStatus(status);
+      // Something else asked in the same message is named, not dropped (cnr-help.ts).
+      const other = otherQuestionWithCnr(originalQuery, cnr);
+      const formattedStatus = other
+        ? `${Replies.formatCaseStatus(status)}\n\n_${otherQuestionNote(other)}_`
+        : Replies.formatCaseStatus(status);
       await this.api.sendText(user.phone_number, formattedStatus);
       await this.memory.append(user.id, originalQuery, formattedStatus);
 
@@ -1219,9 +1231,22 @@ export class ConversationService {
     const result = await this.precedents.search(intent, user.bar_council_state);
     const pageSize = this.precedents.pageSize;
 
+    // Indian Kanoon could not be reached and there is nothing local to search:
+    // said as it is, and refunded - as on the website (precedents.service.ts).
+    if (result.unavailable) {
+      await this.credits
+        .refund(user.id, user.role, spendReference(job.waMessageId), 'Judgment search unavailable')
+        .catch((err) => this.logger.warn({ err }, 'Could not refund an unavailable judgment search'));
+      await this.api.sendText(job.from, /[ऀ-ॿ]/.test(originalText) ? JUDGMENT_SEARCH_UNAVAILABLE_HI : JUDGMENT_SEARCH_UNAVAILABLE);
+      return CLEARED_PRECEDENTS;
+    }
+
     // A named case with no judgment may still be a case - a district-court
     // matter rarely has a reported judgment. The same step as the website's.
-    const cases = result.namedCase?.found ? null : await this.ecourts.casesForQuestion(originalText);
+    // Not for a citation that cannot exist: eCourts' party lists would answer
+    // the name it came with (web/chat.service.ts).
+    const impossible = result.precedents.length === 0 && impossibleCitation(originalText) !== null;
+    const cases = result.namedCase?.found || impossible ? null : await this.ecourts.casesForQuestion(originalText);
 
     /*
      * A search that found nothing is refunded, as it already was on the web.
@@ -1437,6 +1462,13 @@ export class ConversationService {
     let text = answer.text.trim();
     if (!text) {
       text = 'I could not produce an answer for that. Try rephrasing, or type *menu* for other options.';
+    }
+    // The judgments found on Indian Kanoon that the answer names, with their
+    // links - as listed under it on the website (rag.service.ts, answerPointOfLaw).
+    if (answer.judgments?.length) {
+      text += `\n\n*Judgments on Indian Kanoon:*\n${answer.judgments
+        .map((j) => `• ${j.case_title}${j.source_url ? ` - ${j.source_url}` : ''}`)
+        .join('\n')}`;
     }
     if (answer.unavailable || answer.free) {
       text += `\n\n${costLine(unverifiedCost, unverified !== null)}`;

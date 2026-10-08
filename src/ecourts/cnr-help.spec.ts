@@ -1,4 +1,4 @@
-import { caseNumberIn, cnrNeededReply, EarlierCase, matchEarlierCase } from './cnr-help';
+import { caseNumberIn, cnrNeededReply, EarlierCase, matchEarlierCase, otherQuestionNote, otherQuestionWithCnr } from './cnr-help';
 
 /**
  * "Check the status of CNR 831/2024" - the filing number off the card above -
@@ -74,5 +74,33 @@ describe('the reply', () => {
 
   it('asks for the CNR when no number was given', () => {
     expect(cnrNeededReply(null, null)).toMatch(/^To check a case, I need its CNR\./);
+  });
+});
+
+/** Live tests of 4 and 7 Oct: the second half of a CNR question dropped without a word (C-07, C-15). */
+describe('another question in the same message as a CNR', () => {
+  it('is found and quoted back (C-15)', () => {
+    expect(
+      otherQuestionWithCnr("CNR DLCT010012342024 — what's the status and which Arbitration Act section governs interim relief?", 'DLCT010012342024'),
+    ).toBe('which Arbitration Act section governs interim relief?');
+  });
+
+  it.each([
+    'dlct010012342024',
+    'Status of CNR UPLK010999992023',
+    'bhai dlct010012342024 wala case kis stage pe hai',
+    'Who are the parties in DLCT010012342024?',
+    'Mera case ka status batao, CNR DLCT010012342024, agli date kab hai?',
+    "CNR DLCT010012342024 - case under section 138 NI Act, what's the status?",
+  ])('is not found in %p, which asks only about the case', (question) => {
+    const cnr = question.toUpperCase().match(/[A-Z]{4}\d{12}/)![0];
+    expect(otherQuestionWithCnr(question, cnr)).toBeNull();
+  });
+
+  it('is said with the status, not answered as if it were', () => {
+    expect(otherQuestionNote('which Arbitration Act section governs interim relief?')).toBe(
+      'Your message also asked: "which Arbitration Act section governs interim relief?" This reply covers only the case status - ' +
+        'send that question on its own and Ley Legal will answer it.',
+    );
   });
 });

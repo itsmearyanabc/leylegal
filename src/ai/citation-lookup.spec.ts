@@ -1,5 +1,5 @@
 import { PrecedentRow } from '../database/types';
-import { ABSOLUTE_RULE_NOTE, assumesAbsoluteRule, canonicalCitation, kanoonCitationForms, sameCitation } from './citation-match';
+import { ABSOLUTE_RULE_NOTE, assumesAbsoluteRule, canonicalCitation, kanoonCitationForms, sameCitation, supremeCourtReport } from './citation-match';
 import { extractCitations } from './legal-patterns';
 import { asksWhichCase } from './intent.service';
 import { kanoonQueries, PrecedentsService, wrongCitationNote } from './precedents.service';
@@ -126,6 +126,17 @@ describe('one report, many spellings (citation-match.ts)', () => {
   });
 });
 
+describe('a report of the Supreme Court alone (supremeCourtReport)', () => {
+  it.each(['(2023) 4 SCC 777', '1992 Supp (1) SCC 335', 'AIR 1962 SC 605', 'AIR 1962 SUPREME COURT 605', '2024 INSC 452', '2023 SCC OnLine SC 12', '(1978) 2 SCR 621', '(2005) 1 SCALE 1'])(
+    '%s is',
+    (citation) => expect(supremeCourtReport(citation)).toBe(true),
+  );
+
+  it.each(['2019 SCC OnLine Del 1234', 'AIR 1980 Del 12', '(2013) 4 KER LJ 686', '2015 DLT 220'])('%s is not', (citation) =>
+    expect(supremeCourtReport(citation)).toBe(false),
+  );
+});
+
 describe('a Supreme Court Cases supplement is a citation (J-CL-10)', () => {
   it('is read out of the question', () => {
     // It was not, and "1992 Supp (1) SCC 335 - which judgment?" became a topic
@@ -210,12 +221,16 @@ describe('a judgment asked for by citation alone', () => {
 describe('a case name with a citation that is not its own (J-FK-11, J-FK-12)', () => {
   it('finds the case by name and says whose citation it is', async () => {
     const { service, kanoon } = build((q) =>
-      q.startsWith('cite:') ? [other2019] : q.startsWith('title:') ? [arnesh] : [],
+      q.startsWith('cite:') ? [other2019] : q.includes('title:') ? [arnesh] : [],
     );
 
     const result = await service.search(asked('Summarise Arnesh Kumar v. State of Bihar, (2019) 3 SCC 112') as never);
 
-    expect(kanoon.search.mock.calls.map((c) => c[0])).toEqual(['cite: 2019 (3) SCC 112', 'title: Arnesh Kumar State of Bihar']);
+    // An SCC citation names a Supreme Court judgment, so the name is looked for there.
+    expect(kanoon.search.mock.calls.map((c) => c[0])).toEqual([
+      'cite: 2019 (3) SCC 112',
+      'doctypes:supremecourt title: Arnesh Kumar State of Bihar',
+    ]);
     expect(result.namedCase?.found).toBe(true);
     expect(result.precedents.map((p) => p.case_title)).toEqual(['Arnesh Kumar vs State Of Bihar & Anr']);
     expect(result.notes).toEqual([
@@ -225,7 +240,7 @@ describe('a case name with a citation that is not its own (J-FK-11, J-FK-12)', (
 
   it("says Kanoon does not list it for the case, and lists the case's own citations, SCC first", async () => {
     // Lalita Kumari is (2014) 2 SCC 1; "(2020) 1 SCC 50" is on no judgment here.
-    const { service } = build((q) => (q.startsWith('title:') ? [lalita] : []));
+    const { service } = build((q) => (q.includes('title:') ? [lalita] : []));
 
     const result = await service.search(asked('What did Lalita Kumari v. Govt. of U.P., (2020) 1 SCC 50 hold?') as never);
 
@@ -252,6 +267,67 @@ describe('a case name with a citation that is not its own (J-FK-11, J-FK-12)', (
 
     expect(result.namedCase).toEqual({ name: 'Arnesh Kumar vs State of Bihar', found: false });
     expect(result.notes).toBeUndefined();
+  });
+
+  it('shows no High Court order for a Supreme Court citation (J-FK-06)', async () => {
+    // Live, 8 Oct: "Varun Mehrotra v. Delhi Police, (2023) 4 SCC 777" - an
+    // invented citation - was answered with this Delhi High Court bail order of
+    // another Varun Mehrotra, for two credits.
+    const order = row({
+      judgment_id: 'kanoon:71231231',
+      case_title: 'Varun Mehrotra vs State Of Nct Of Delhi & Anr',
+      court_name: 'Delhi High Court - Orders',
+      judgment_date: new Date('2020-06-02'),
+    });
+    const { service, kanoon } = build((q) => (q.startsWith('cite:') ? [] : [order]));
+
+    const result = await service.search(asked('Is Varun Mehrotra v. Delhi Police, (2023) 4 SCC 777 good law on bail?') as never);
+
+    expect(kanoon.search.mock.calls.map((c) => c[0])).toContain('doctypes:supremecourt title: Varun Mehrotra Delhi Police');
+    expect(result.precedents).toEqual([]);
+    expect(result.namedCase).toEqual({ name: 'Varun Mehrotra vs Delhi Police', found: false });
+    expect(result.notes).toBeUndefined();
+  });
+
+  it('shows no High Court judgment for a Supreme Court citation either', async () => {
+    const highCourt = row({ judgment_id: 'kanoon:4242', case_title: 'Arnesh Kumar vs State Of Bihar', court_name: 'Patna High Court' });
+    const { service } = build((q) => (q.startsWith('cite:') ? [] : [highCourt]));
+
+    const result = await service.search(asked('Summarise Arnesh Kumar v. State of Bihar, (2019) 3 SCC 112') as never);
+
+    expect(result.precedents).toEqual([]);
+    expect(result.namedCase?.found).toBe(false);
+  });
+
+  it('keeps a High Court judgment for a High Court report', async () => {
+    const highCourt = row({ judgment_id: 'kanoon:4243', case_title: 'Ramesh Kumar vs State', court_name: 'Delhi High Court' });
+    const { service, kanoon } = build((q) => (q.startsWith('cite:') ? [] : [highCourt]));
+
+    const result = await service.search(asked('Summarise Ramesh Kumar v. State, 2019 SCC OnLine Del 1234') as never);
+
+    expect(kanoon.search.mock.calls.map((c) => c[0]).some((q) => q.includes('doctypes:supremecourt'))).toBe(false);
+    expect(result.precedents.map((p) => p.case_title)).toEqual(['Ramesh Kumar vs State']);
+  });
+
+  it('looks nowhere for a citation that cannot exist (J-FK-10)', async () => {
+    // Live, 8 Oct: four High Court cases of other Laxmi Narayans, for two
+    // credits, where it had been "that citation cannot exist", free.
+    const { service, kanoon } = build(() => [row({ case_title: 'Laxmi Narayan vs State Nct Of Delhi', court_name: 'Delhi High Court' })]);
+
+    const result = await service.search(asked('Give the ratio of Laxmi Narayan v. State, (2028) 1 SCC 1') as never);
+
+    expect(kanoon.search).not.toHaveBeenCalled();
+    expect(result.precedents).toEqual([]);
+    expect(result.namedCase).toEqual({ name: 'Laxmi Narayan vs State', found: false });
+  });
+
+  it('looks nowhere for an SCC volume no year has, named or not (J-FK-09)', async () => {
+    const { service, kanoon } = build(() => [lalita]);
+
+    const result = await service.search(asked('Summarise (2023) 99 SCC 1') as never);
+
+    expect(kanoon.search).not.toHaveBeenCalled();
+    expect(result.namedCase).toEqual({ name: '(2023) 99 SCC 1', found: false });
   });
 
   it('builds the note from Kanoon\'s records only', () => {
@@ -311,5 +387,49 @@ describe('"which case held ..." (S-SL-02, J-PL-14)', () => {
   it('leaves an ordinary provision search as it was', () => {
     const intent = { ...asked('judgments on Article 21 and prisoners'), searchQuery: 'Article 21 prisoners', sectionNumber: 'Article 21', actCode: 'COI' };
     expect(kanoonQueries(intent as never)[0]).toBe('"Article 21" "Constitution of India"');
+  });
+});
+
+describe('Indian Kanoon down, with no local corpus (7 Oct outage)', () => {
+  function auto(hasJudgments: boolean | Error) {
+    const kanoon = { isConfigured: true, isDegraded: false, search: jest.fn().mockRejectedValue(new Error('Circuit kanoon is open')), documentHeader: jest.fn() };
+    const corpus = {
+      hasJudgmentChunks: hasJudgments instanceof Error ? jest.fn().mockRejectedValue(hasJudgments) : jest.fn().mockResolvedValue(hasJudgments),
+      searchPrecedents: jest.fn().mockResolvedValue([]),
+    };
+    const service = new PrecedentsService(
+      corpus as never,
+      { embedQuery: jest.fn().mockResolvedValue(null) } as never,
+      kanoon as never,
+      { get: () => 'auto', getNumber: (_k: string, d: number) => d } as never,
+      { isRouterMocked: true } as never,
+      { KANOON_ENRICH_MAX: 5, PRECEDENT_MAX_RESULTS: 15, PRECEDENT_PAGE_SIZE: 5 } as never,
+    );
+    return { service, corpus };
+  }
+
+  it('is reported as unavailable, not searched locally for nothing', async () => {
+    const { service, corpus } = auto(false);
+
+    const result = await service.search(asked('Summarise Arnesh Kumar v. State of Bihar') as never);
+
+    expect(result.unavailable).toBe(true);
+    expect(result.precedents).toEqual([]);
+    expect(corpus.searchPrecedents).not.toHaveBeenCalled();
+  });
+
+  it('is reported as unavailable when the corpus cannot be read either', async () => {
+    const { service } = auto(new Error('database down'));
+    expect((await service.search(asked('Summarise Arnesh Kumar v. State of Bihar') as never)).unavailable).toBe(true);
+  });
+
+  it('falls back to a local corpus that has judgments, as before', async () => {
+    const { service, corpus } = auto(true);
+
+    const result = await service.search(asked('Summarise Arnesh Kumar v. State of Bihar') as never);
+
+    expect(result.unavailable).toBeUndefined();
+    expect(result.source).toBe('local');
+    expect(corpus.searchPrecedents).toHaveBeenCalled();
   });
 });

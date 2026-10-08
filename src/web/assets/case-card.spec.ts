@@ -134,3 +134,42 @@ describe('the website case card', () => {
     expect(source).not.toContain('data.disposalNature');
   });
 });
+
+/** The 8 October fixes, as the browser draws them. */
+describe('notes and links added on 8 October', () => {
+  it('says under the card which part of the message it did not answer (C-15)', () => {
+    const note = 'Your message also asked: "which Arbitration Act section governs interim relief?" This reply covers only the case status - send that question on its own and Ley Legal will answer it.';
+    const card = renderCaseStatus(withCaseRows({ ...reported, note }, '2026-10-02'));
+    expect(text(card)).toContain(note);
+  });
+
+  it('adds nothing under a plain card', () => {
+    expect(text(renderCaseStatus(withCaseRows(reported, '2026-10-02')))).not.toContain('Your message also asked');
+  });
+
+  const renderSources = new Function(
+    'document',
+    [
+      APP_JS.slice(APP_JS.indexOf('const el = '), APP_JS.indexOf('};\n', APP_JS.indexOf('const el = ')) + 3),
+      lift('renderSources'),
+      'return renderSources;',
+    ].join('\n'),
+  )(fakeDocument()) as (sources: unknown[]) => FakeNode;
+
+  it('links a judgment found on Indian Kanoon to it (point-of-law answers)', () => {
+    const list = renderSources([
+      { caseTitle: 'Narinder Singh & Ors vs State Of Punjab & Anr', citation: '2014 (6) SCC 466', court: 'Supreme Court of India', url: 'https://indiankanoon.org/doc/100001/' },
+      { caseTitle: 'A corpus passage', citation: null, court: null, paragraph: 4 },
+    ]);
+    const links = find(list, 'a') as (FakeNode & { href?: string; rel?: string })[];
+    expect(links).toHaveLength(1);
+    expect(links[0].href).toBe('https://indiankanoon.org/doc/100001/');
+    expect(links[0].rel).toBe('noopener noreferrer');
+    expect(links[0].textContent).toBe('Narinder Singh & Ors vs State Of Punjab & Anr — 2014 (6) SCC 466 — Supreme Court of India');
+  });
+
+  it('links nothing that is not an Indian Kanoon page', () => {
+    const list = renderSources([{ caseTitle: 'X vs Y', url: 'javascript:alert(1)' }]);
+    expect(find(list, 'a')).toHaveLength(0);
+  });
+});

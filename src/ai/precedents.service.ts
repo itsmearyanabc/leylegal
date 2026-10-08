@@ -11,20 +11,24 @@ import { SettingsService } from '../settings/settings.service';
 // WhatsApp message, so sharing the closing copy is the honest dependency.
 import { CAVEAT, RETURN_TO_MENU } from '../whatsapp/replies';
 import { EmbeddingService } from './embedding.service';
-import { asksWhichCase, ClassifiedIntent } from './intent.service';
+import { asksForOneJudgment, asksWhichCase, ClassifiedIntent, seeksAuthorities } from './intent.service';
 import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName, looseTitle, samePetitioner } from './case-name';
-import { ABSOLUTE_RULE_NOTE, assumesAbsoluteRule, kanoonCitationForms, sameCitation } from './citation-match';
+import { ABSOLUTE_RULE_NOTE, assumesAbsoluteRule, kanoonCitationForms, sameCitation, supremeCourtReport } from './citation-match';
 import {
+  asksIfStillGoodLaw,
   buildLeadingJudgmentsPrompt,
+  buildOverruledByPrompt,
   LeadingJudgment,
   leadingFirst,
   leadingJudgmentQueries,
   parseLeadingJudgments,
   pickLeadingJudgment,
+  textOverrules,
 } from './leading-judgments';
 import { expandQuery, extractCitations } from './legal-patterns';
 import { buildCaseSummaryPrompt, buildPrincipleSummaryPrompt } from './prompts';
 import { DEFAULT_SUMMARY_WORDS, requestedWordCount, withoutLengthRequest } from './summary-length';
+import { impossibleCitation } from './web-fallback';
 import { parseJsonLoose } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
 
@@ -126,6 +130,9 @@ function display(name: CaseName): string {
 /** How long the leading judgments may take before the search goes on without them. */
 const LEADING_BUDGET_MS = 9_000;
 
+/** How long finding and reading an overruling judgment may take: the later judgment's whole text is read. */
+const OVERRULING_BUDGET_MS = 12_000;
+
 /** One page: a title and year search finds one judgment and its copies. */
 const LEADING_SEARCH_RESULTS = 10;
 
@@ -164,6 +171,21 @@ function citationRank(citation: string): number {
   return 2;
 }
 
+/**
+ * Said above a judgment asked about as "still good law?": the later judgment
+ * that overruled it, found on Kanoon and saying so in its text - or that none
+ * was found, which is not the same as its being good law.
+ */
+export function goodLawNote(named: PrecedentRow, overruling: PrecedentRow | null): string {
+  if (!overruling) {
+    return `Ley Legal did not find a later judgment overruling ${named.case_title}. That does not confirm it is still good law - ` +
+      'check how later judgments have treated it before relying on it.';
+  }
+  const year = overruling.judgment_date ? ` (${new Date(overruling.judgment_date).getUTCFullYear()})` : '';
+  return `Overruled: ${named.case_title} was overruled by ${overruling.case_title}${year}, listed below it. ` +
+    'The later judgment was named by AI and found on Indian Kanoon, and its text says the earlier one is overruled.';
+}
+
 /** The note for a question that assumes an absolute rule, over a topic list only (citation-match.ts). */
 function premiseNote(question: string, namedCase: { found: boolean } | undefined, results: number): string | null {
   return !namedCase && results > 0 && assumesAbsoluteRule(question) ? ABSOLUTE_RULE_NOTE : null;
@@ -197,7 +219,11 @@ function premiseNote(question: string, namedCase: { found: boolean } | undefined
  * documented operators run to the next operator, and a title operand followed by
  * `doctypes:patna` could otherwise be read as a title containing "doctypes".
  */
-export function kanoonQueries(intent: ClassifiedIntent, opts: { skipCitation?: boolean } = {}): string[] {
+export function kanoonQueries(
+  intent: ClassifiedIntent,
+  /** `court`: the court a named case must be from - the Supreme Court, for a Supreme Court report beside it. */
+  opts: { skipCitation?: boolean; court?: string } = {},
+): string[] {
   const court = courtFilter(intent.rawText);
   // "in 100 words" is about the reply. Left in, Kanoon scores judgments on it.
   const searchQuery = withoutLengthRequest(intent.searchQuery);
@@ -220,7 +246,7 @@ export function kanoonQueries(intent: ClassifiedIntent, opts: { skipCitation?: b
   const name = extractCaseName(intent.rawText);
   if (name) {
     const parties = `${name.petitioner} ${name.respondent}`;
-    const scope = (name.court ? courtFilter(name.court) : null) ?? court;
+    const scope = opts.court ?? (name.court ? courtFilter(name.court) : null) ?? court;
     // Last, the words of the title Kanoon keeps when it shortens a party
     // (looseTitle) - only reached when everything before found somebody else.
     const loose = looseTitle(name);
@@ -353,6 +379,15 @@ const ACT_PHRASES: Record<string, string> = {
   COI: 'Constitution of India',
 };
 
+/** The reply when Indian Kanoon cannot be searched and nothing else can be (PrecedentSearchResult.unavailable). */
+export const JUDGMENT_SEARCH_UNAVAILABLE =
+  'Judgment search is not available right now: Indian Kanoon, where Ley Legal looks for judgments, is not responding, ' +
+  'so nothing was searched. You have not been charged. Please ask again in a few minutes.';
+
+export const JUDGMENT_SEARCH_UNAVAILABLE_HI =
+  'फ़ैसलों की खोज अभी उपलब्ध नहीं है: Indian Kanoon, जहाँ Ley Legal फ़ैसले खोजता है, जवाब नहीं दे रहा, इसलिए कुछ खोजा नहीं गया। ' +
+  'आपसे कोई क्रेडिट नहीं लिया गया। कुछ मिनट बाद फिर से पूछें।';
+
 /** How a list of judgments is ordered - said on the page by orderingNote. */
 export interface PrecedentGrouping {
   /** The advocate's High Court, first when the list is arranged by court. */
@@ -361,6 +396,8 @@ export interface PrecedentGrouping {
   byCourt?: false;
   /** How many leading judgments open the list (leading-judgments.ts). */
   leading?: number;
+  /** The leading judgments are the whole list: the question asked for one judgment (asksForOneJudgment). */
+  onlyLeading?: true;
 }
 
 export interface PrecedentSearchResult {
@@ -397,6 +434,11 @@ export interface PrecedentSearchResult {
    * records or off the question - never generated.
    */
   notes?: string[];
+  /**
+   * Indian Kanoon could not be searched and there is no local corpus to search
+   * instead: nothing was looked up, so nothing is "not found" (web/chat.service.ts).
+   */
+  unavailable?: true;
   latencyMs: number;
 }
 
@@ -489,8 +531,14 @@ export class PrecedentsService {
          * court whose decisions bind this advocate. A search restricted to that
          * court finds them when they exist. Three Kanoon calls rather than
          * one, in parallel so it costs no time, and each is cached.
+         *
+         * Not for a question whose answer is one judgment, or one asking for
+         * authorities to argue from: there the home court's recent orders were
+         * padding (intent.service.ts, asksForOneJudgment, seeksAuthorities).
          */
-        const scoped = priorityQueries(intent, homeState);
+        const oneJudgment = asksForOneJudgment(intent.rawText);
+        const home = oneJudgment || seeksAuthorities(intent.rawText) ? null : homeState;
+        const scoped = priorityQueries(intent, home);
         const citation = extractCitations(intent.rawText)[0] ?? null;
         /*
          * A citation is looked up as a citation: in Kanoon's spelling, and
@@ -508,11 +556,36 @@ export class PrecedentsService {
         let leading: PrecedentRow[] = [];
         let wrongCitation: { citation: string; owner: PrecedentRow | null } | null = null;
         if (citation) {
+          /*
+           * A citation that cannot exist - a future year, an SCC volume no
+           * year has - is looked for nowhere, by name included. "Laxmi Narayan
+           * v. State, (2028) 1 SCC 1" was answered with four High Court cases of
+           * other Laxmi Narayans, for two credits, where it had been "that
+           * citation cannot exist", free (live test, 8 Oct, J-FK-10). The reply
+           * says why (web/chat.service.ts).
+           */
+          if (impossibleCitation(intent.rawText)) {
+            const name = extractCaseName(intent.rawText);
+            return {
+              precedents: [],
+              namedCase: { name: name ? display(name) : citation, found: false },
+              totalMatches: 0,
+              lexicalOnly: false,
+              source: 'kanoon',
+              latencyMs: Date.now() - started,
+            };
+          }
           const cited = await this.findByCitation(citation);
           const name = extractCaseName(intent.rawText);
           const theirs = name ? cited.filter((row) => caseNameScore(name, row.case_title) >= CASE_NAME_MATCH) : cited;
           if (name && theirs.length === 0) {
-            found = await this.searchKanoon(intent, { skipCitation: true });
+            // A Supreme Court report names a Supreme Court judgment: the name
+            // is looked for there, and nothing else stands in for it - not a
+            // High Court order of somebody with the same name (live test, 8
+            // Oct, J-FK-06; citation-match.ts, supremeCourtReport).
+            const supreme = supremeCourtReport(citation);
+            const byName = await this.searchKanoon(intent, { skipCitation: true, ...(supreme ? { court: 'supremecourt' } : {}) });
+            found = supreme ? byName.filter((row) => courtWeight(row) === 1 && !isOrder(row)) : byName;
             wrongCitation = { citation, owner: cited[0] ?? null };
           } else {
             found = theirs;
@@ -528,22 +601,33 @@ export class PrecedentsService {
           ]);
         }
         const { precedents, namedCase } = this.forNamedCase(intent.rawText, found);
+        // Asked for one judgment and the leading judgments found it: they are
+        // the answer, with nothing added (asksForOneJudgment).
+        const onlyLeading = oneJudgment && !namedCase && leading.length > 0;
+        // "Is it still good law?" - the judgment that overruled it, after it,
+        // when one is found and its text says so (overruledBy).
+        const goodLawAsked = namedCase?.found === true && asksIfStillGoodLaw(intent.rawText) && precedents.length > 0;
+        const overruling = goodLawAsked ? await this.overruledBy(precedents[0], intent) : null;
         // Promote first, enrich second. The other way round pays for documents
         // the advocate will never see and leaves the top of the page empty.
-        const ordered = leadingFirst(
-          leading,
-          scoped
-            ? arrangeByCourt({ home: homeRows, supreme: supremeRows, general: precedents }, homeState, this.maxResults)
-            : prioritiseHomeCourt(precedents, homeState),
-          this.maxResults,
-        );
-        const byCourt: PrecedentGrouping | undefined = scoped ? { homeCourt: homeCourtName(homeState) } : undefined;
+        const ordered = onlyLeading
+          ? leading
+          : leadingFirst(
+              leading,
+              scoped
+                ? arrangeByCourt({ home: homeRows, supreme: supremeRows, general: precedents }, home, this.maxResults)
+                : prioritiseHomeCourt(precedents, home),
+              this.maxResults,
+            );
+        if (overruling && !ordered.some((row) => row.judgment_id === overruling.judgment_id)) ordered.push(overruling);
+        const byCourt: PrecedentGrouping | undefined = scoped ? { homeCourt: homeCourtName(home) } : undefined;
         const searchedAt = Date.now();
         const headed = await this.withHeaders(ordered);
         const headedAt = Date.now();
         const notes = [
           wrongCitation && namedCase?.found && headed[0] ? wrongCitationNote(wrongCitation.citation, headed[0], wrongCitation.owner) : null,
           premiseNote(intent.rawText, namedCase, headed.length),
+          goodLawAsked ? goodLawNote(precedents[0], overruling) : null,
         ].filter((note): note is string => note !== null);
         /*
          * The card summaries and a named case's own summary are written at the
@@ -574,9 +658,11 @@ export class PrecedentsService {
         return {
           precedents: summary ? [{ ...enriched[0], generated_summary: summary }, ...enriched.slice(1)] : enriched,
           namedCase,
-          grouping: leading.length
-            ? { ...(byCourt ?? { homeCourt: null, byCourt: false }), leading: leading.length }
-            : byCourt,
+          grouping: onlyLeading
+            ? { homeCourt: null, byCourt: false, leading: leading.length, onlyLeading: true }
+            : leading.length
+              ? { ...(byCourt ?? { homeCourt: null, byCourt: false }), leading: leading.length }
+              : byCourt,
           ...(notes.length > 0 ? { notes } : {}),
           totalMatches: precedents[0]?.total_matches ?? precedents.length,
           // Kanoon runs its own relevance ranking; the local dense/lexical
@@ -592,6 +678,18 @@ export class PrecedentsService {
           // Explicitly pinned to Kanoon: silently serving local results would
           // misrepresent where the authorities came from.
           throw err;
+        } else if (!(await this.localCorpusSearchable())) {
+          /*
+           * Nothing local to fall back to: said as it is, and not charged.
+           *
+           * For six minutes on 7 October (17:22-17:28 IST) every judgment
+           * search fell back to the local corpus, which holds no judgments,
+           * and the advocate was told "no judgment found" - or shown eCourts
+           * party lists - and charged (client's audit, outage sheet). The
+           * search did not run; nothing was found or not found.
+           */
+          this.logger.error({ err }, 'Indian Kanoon search failed and there is no local corpus - judgment search is unavailable');
+          return { precedents: [], unavailable: true, totalMatches: 0, lexicalOnly: false, source: 'kanoon', latencyMs: Date.now() - started };
         } else {
           this.logger.error({ err }, 'Indian Kanoon search failed - falling back to the local corpus');
         }
@@ -599,6 +697,35 @@ export class PrecedentsService {
     }
 
     return this.searchLocal(intent, started, homeState, words);
+  }
+
+  /**
+   * The leading judgments on a point of law, for an answer written about it
+   * rather than a list (rag.service.ts, answerPointOfLaw): named by the model,
+   * each found on Indian Kanoon by title and year, with the citations Kanoon
+   * prints on it. Never throws; empty when Kanoon is not the source, or found
+   * nothing.
+   */
+  async authoritiesFor(intent: ClassifiedIntent): Promise<PrecedentRow[]> {
+    const mode = this.source;
+    if (!(mode === 'kanoon' || (mode === 'auto' && this.kanoon.isConfigured))) return [];
+    const leading = await this.leadingJudgments(intent);
+    if (leading.length === 0) return [];
+    try {
+      return await this.withHeaders(leading);
+    } catch (err) {
+      this.logger.warn({ err }, 'Could not read the leading judgments\' citations - named without them');
+      return leading;
+    }
+  }
+
+  /** Whether the ingested corpus holds any judgment to search; false when that cannot be told. */
+  private async localCorpusSearchable(): Promise<boolean> {
+    try {
+      return await this.corpus.hasJudgmentChunks();
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -623,7 +750,7 @@ export class PrecedentsService {
    * Cost: a hit on the first attempt is one call, as before. Only a miss pays
    * for the broader ones.
    */
-  private async searchKanoon(intent: ClassifiedIntent, opts: { skipCitation?: boolean } = {}): Promise<PrecedentRow[]> {
+  private async searchKanoon(intent: ClassifiedIntent, opts: { skipCitation?: boolean; court?: string } = {}): Promise<PrecedentRow[]> {
     const attempts = kanoonQueries(intent, opts);
     const name = extractCaseName(intent.rawText);
 
@@ -778,6 +905,72 @@ export class PrecedentsService {
     } catch (err) {
       this.logger.warn({ err }, 'Could not look for the leading judgments - the search stands without them');
       return [];
+    }
+  }
+
+  /**
+   * The later judgment that overruled this one - or null.
+   *
+   * "Is Shafhi Mohammad v. State of H.P. still good law?" returned Shafhi
+   * Mohammad alone, with no word of Arjun Panditrao Khotkar (2020), which
+   * overruled it; Suresh Kumar Koushal without Navtej Singh Johar, P.V.
+   * Narasimha Rao without Sita Soren (live test, 8 Oct, J-GL-01, 02, 08).
+   *
+   * The model names the overruling judgment; it is found on Kanoon by title and
+   * year, as a leading judgment is, and must be later; and its own text must
+   * say the earlier one was overruled (leading-judgments.ts, textOverrules).
+   * Any step that fails means null. Never throws; bounded like the leading
+   * judgments.
+   */
+  private async overruledBy(named: PrecedentRow, intent: ClassifiedIntent): Promise<PrecedentRow | null> {
+    if (this.registry.isSynthesisMocked ?? true) return null;
+    let timer: NodeJS.Timeout | undefined;
+    const outOfTime = new Promise<null>((resolve) => {
+      timer = setTimeout(() => {
+        this.logger.warn({ ms: OVERRULING_BUDGET_MS }, 'Looking for an overruling judgment took too long - the answer stands without it');
+        resolve(null);
+      }, OVERRULING_BUDGET_MS);
+    });
+    try {
+      return await Promise.race([this.findOverruling(named, intent), outOfTime]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async findOverruling(named: PrecedentRow, intent: ClassifiedIntent): Promise<PrecedentRow | null> {
+    try {
+      const delivered = named.judgment_date ? new Date(named.judgment_date).getUTCFullYear() : null;
+      const result = await this.registry.complete({
+        task: 'synthesis',
+        system: buildOverruledByPrompt(named.case_title, named.court_name, delivered),
+        messages: [{ role: 'user', content: intent.rawText.trim() }],
+        json: true,
+        maxTokens: 200,
+      });
+      if (result.mocked) return null;
+
+      const supreme = courtWeight(named) === 1;
+      const candidates = parseLeadingJudgments(result.text, new Date().getUTCFullYear())
+        .filter((judgment) => delivered === null || judgment.year >= delivered)
+        .slice(0, 2);
+      const petitioner = (extractCaseName(named.case_title)?.petitioner ?? '')
+        .split(/\s+/)
+        .filter((word) => !/^(?:state|union|india|govt\.?|government|the|of|and|ors\.?|anr\.?|&)$/i.test(word));
+
+      for (const candidate of candidates) {
+        const later = await this.confirmLeadingJudgment(candidate, supreme ? 'supremecourt' : null);
+        const tid = later ? kanoonTid(later.judgment_id) : null;
+        if (!later || tid === null || later.judgment_id === named.judgment_id) continue;
+        const html = await this.kanoon.lawDocument(tid, this.env.KANOON_TIMEOUT_MS).catch(() => '');
+        const says = textOverrules(html, petitioner);
+        this.logger.info({ named: named.case_title, candidate: `${candidate.name} (${candidate.year})`, found: later.case_title, says }, 'Overruling judgment');
+        if (says) return later;
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn({ err }, 'Could not look for an overruling judgment - the answer stands without it');
+      return null;
     }
   }
 
@@ -1501,6 +1694,11 @@ export function arrangeByCourt(
  * first because of its court, and not because it is the newest.
  */
 export function orderingNote(grouping: PrecedentGrouping | undefined): string {
+  if (grouping?.onlyLeading) {
+    return grouping.leading === 1
+      ? 'the leading judgment, named by AI and found on Indian Kanoon'
+      : 'the leading judgments, named by AI and each found on Indian Kanoon';
+  }
   const rest =
     !grouping || grouping.byCourt === false
       ? 'newest first'

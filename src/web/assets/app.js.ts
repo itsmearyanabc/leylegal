@@ -1389,7 +1389,17 @@ function renderSources(sources) {
     if (source.citation) parts.push(source.citation);
     if (source.court) parts.push(source.court);
     if (source.paragraph) parts.push('para ' + source.paragraph);
-    list.appendChild(el('li', null, parts.filter(Boolean).join(' — ')));
+    const item = el('li', null, parts.filter(Boolean).join(' — '));
+    // A judgment found on Indian Kanoon links to it (rag.service.ts, answerPointOfLaw).
+    if (/^https:\/\/indiankanoon\.org\//.test(source.url || '')) {
+      item.textContent = '';
+      const link = el('a', null, parts.filter(Boolean).join(' — '));
+      link.href = source.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      item.appendChild(link);
+    }
+    list.appendChild(item);
   }
 
   details.appendChild(list);
@@ -1653,6 +1663,14 @@ function renderCaseStatus(data) {
 
   const wrap = el('div');
   wrap.appendChild(card);
+
+  // The message also asked something else, which this card does not answer
+  // (cnr-help.ts, otherQuestionWithCnr).
+  if (data.note) {
+    const note = el('div', 'alert info', data.note);
+    note.style.marginTop = '13px';
+    wrap.appendChild(note);
+  }
 
   // The mock adapter produces plausible-looking case records. An advocate must
   // never mistake one for a court record, so this is stated at full strength

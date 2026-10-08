@@ -119,6 +119,19 @@ describe('statute reference extraction', () => {
     expect(extractStatuteRefs('BNS Section 2023 does not exist')).toEqual(['BNS 2023']);
     expect(extractStatuteRefs('Section 2023 BNS')).toEqual(['BNS 2023']);
   });
+
+  it("reads a number straight after one code as that code's, not the next one's (M-IPC-029)", () => {
+    // Live, 8 Oct: "IPC 326B BNS mein Section 124 ke saath correspond karta
+    // hai" was read as BNS 326B too, which does not exist, and was struck:
+    // "IPC[unverified] mein Section 124".
+    expect(extractStatuteRefs('*SUMMARY:* IPC 326B BNS mein Section 124 ke saath correspond karta hai.')).toEqual(['IPC 326B']);
+    expect(extractStatuteRefs('IPC Section 498A BNS mein 85 aur 86 hai')).toEqual(['IPC 498A']);
+    // A list still reads every item.
+    expect(extractStatuteRefs('Sections 302 IPC and 498A IPC, with CrPC 438.')).toEqual(
+      expect.arrayContaining(['IPC 302', 'IPC 498A', 'CRPC 438']),
+    );
+    expect(extractStatuteRefs('IPC 302 is now 103 BNS')).toEqual(expect.arrayContaining(['IPC 302', 'BNS 103']));
+  });
 });
 
 describe('query expansion', () => {

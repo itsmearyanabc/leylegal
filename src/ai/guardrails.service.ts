@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { RetrievedChunk, StatuteRow } from '../database/types';
+import { sameCitation } from './citation-match';
 import { ClassifiedIntent } from './intent.service';
 import { extractCitations, extractStatuteRefs } from './legal-patterns';
 import { PROMPT_GIVEN_REFS } from './prompts';
@@ -157,6 +158,14 @@ export class GuardrailsService {
     intent?: ClassifiedIntent,
     history: LlmMessage[] = [],
     given?: StatuteRow[],
+    /**
+     * Citations Indian Kanoon prints on the judgments the model was given
+     * (rag.service.ts, answerPointOfLaw). Verified by that, in any spelling:
+     * the ingested corpus they would otherwise be looked up in holds no
+     * judgments, and "Shayara Bano v. Union of India [unverified]" was the
+     * result (live test, 8 Oct, J-PL-44).
+     */
+    confirmed: string[] = [],
   ): Promise<GuardrailReport> {
     if (!answer.trim()) {
       return { text: answer, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null };
@@ -169,14 +178,16 @@ export class GuardrailsService {
       classificationStripped = result.stripped;
     }
 
-    const citations = extractCitations(answer);
+    const all = extractCitations(answer);
+    const onKanoon = all.filter((citation) => confirmed.some((c) => sameCitation(c, citation)));
+    const citations = all.filter((citation) => !onKanoon.includes(citation));
     const statuteRefs = extractStatuteRefs(answer);
     const ungrounded = given ? this.ungrounded(statuteRefs, given, intent, history) : [];
 
     if (citations.length === 0 && statuteRefs.length === 0) {
       return {
         text: classificationStripped ? withNote(answer, CLASSIFICATION_NOTE) : answer,
-        verifiedCitations: [],
+        verifiedCitations: onKanoon,
         removed: [],
         flagged: [],
         triggered: classificationStripped,
@@ -202,7 +213,7 @@ export class GuardrailsService {
 
     const removed: string[] = [];
     const flagged: string[] = [];
-    const verified: string[] = [];
+    const verified: string[] = [...onKanoon];
 
     for (const check of citationChecks) {
       if (!check.found) {
@@ -303,11 +314,13 @@ export class GuardrailsService {
     known: Map<string, boolean>,
     given?: StatuteRow[],
     history: LlmMessage[] = [],
+    /** As verify()'s: citations Kanoon prints on the judgments given. */
+    confirmed: string[] = [],
   ): Promise<string> {
     // The same two checks as verify(), line for line, so a draft never shows
     // what the finished answer will not.
     if (given) prefix = stripUnsupportedClassification(prefix, given).text;
-    const citations = extractCitations(prefix);
+    const citations = extractCitations(prefix).filter((citation) => !confirmed.some((c) => sameCitation(c, citation)));
     const statuteRefs = extractStatuteRefs(prefix);
     const ungrounded = given ? this.ungrounded(statuteRefs, given, intent, history) : [];
     const askedStatute = intent?.actCode && intent?.sectionNumber

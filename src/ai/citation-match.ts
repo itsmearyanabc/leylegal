@@ -99,6 +99,22 @@ export function kanoonCitationForms(citation: string): string[] {
 }
 
 /**
+ * A report of the Supreme Court alone: SCC and its supplements, SCR, SCALE, JT,
+ * INSC, "AIR ... SC" - and SCC OnLine only as "SCC OnLine SC", since "SCC
+ * OnLine Del" is the Delhi High Court.
+ *
+ * The judgment such a citation names is a Supreme Court judgment. "Varun
+ * Mehrotra v. Delhi Police, (2023) 4 SCC 777" - an invented citation - was
+ * answered with a 2020 Delhi High Court order in another Varun Mehrotra's bail
+ * matter, found by the name alone (live test, 8 Oct, J-FK-06).
+ */
+export function supremeCourtReport(citation: string): boolean {
+  const s = citation.toUpperCase().replace(/SUPREME\s+COURT/g, 'SC');
+  if (/\bSCC\s+ONLINE\b/.test(s)) return /\bSCC\s+ONLINE\s+SC\b/.test(s);
+  return /\b(?:SCC|SCR|SCALE|INSC|JT)\b/.test(s) || /^AIR\s*\d{4}\s+SC\b/.test(s);
+}
+
+/**
  * The question assumes a rule that holds always or never.
  *
  * "Give me five Supreme Court judgments ... holding that bail must always be

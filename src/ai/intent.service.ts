@@ -560,6 +560,48 @@ export const ASSIGNMENT_REPLY =
   'on your topic, or for the sections that apply, and build the assignment from those.';
 
 /**
+ * Requests for something Ley Legal does not do, and questions about Ley Legal
+ * itself: a fixed reply, free, like the assignment one above.
+ *
+ * Each was answered by the model and charged two credits (live test, 8 Oct):
+ * "Give me 10 MCQs on BNSS for judiciary prelims" got a quiz with a question
+ * that had no right option (S-MT-05) - practice questions are "Planned" on the
+ * homepage, not live; "Track all my cases automatically" got "I can't automate
+ * case tracking" (C-19); "Is your answer legal advice?" got a correct "no"
+ * (B-13), free the day before. Narrow on purpose: each pattern names the
+ * request itself, so a legal question that mentions a quiz or a case is still
+ * answered as one.
+ */
+export function productReply(text: string): string | null {
+  if (/\b(?:mcqs?|quiz(?:zes)?|multiple[\s-]+choice|objective\s+questions?|mock\s+(?:tests?|papers?|exams?)|practice\s+(?:questions?|tests?|sets?|papers?)|flash\s*cards?)\b/i.test(text)) {
+    return PRACTICE_REPLY;
+  }
+  if (
+    // "track all my cases", "monitor my pending matters" - not "can the police track my phone in criminal cases".
+    /\b(?:track|monitor|keep\s+track\s+of|follow\s+up\s+on)\s+(?:all\s+)?(?:of\s+)?(?:my|our|the|these|those|his|her|their|client'?s?)?\s*(?:\w+\s+)?(?:cases?|matters?|hearings?)\b/i.test(text) ||
+    /\b(?:alerts?|notif(?:y|ications?)|reminders?|remind\s+me)\b[^.?!\n]{0,25}\b(?:hearings?|hearing\s+dates?|next\s+(?:hearing\s+)?dates?|my\s+cases?)\b/i.test(text)
+  ) {
+    return TRACKING_REPLY;
+  }
+  if (/\b(?:you|your|ley\s*legal|this\s+(?:app|tool|bot|service))\b[^.?!\n]{0,40}\blegal\s+advice\b|\blegal\s+advice\b[^.?!\n]{0,30}\b(?:you|your|ley\s*legal)\b/i.test(text)) {
+    return ADVICE_REPLY;
+  }
+  return null;
+}
+
+export const PRACTICE_REPLY =
+  'Practice questions and MCQs are not live in Ley Legal yet - "New criminal laws practice" is planned for students. ' +
+  'For now, ask about any BNS, BNSS or BSA section and its old-code counterpart, and Ley Legal will explain it from the Act\'s own text.';
+
+export const TRACKING_REPLY =
+  'Ley Legal does not track cases or send hearing alerts. You can look up a case\'s current status at any time by sending ' +
+  'its 16-character CNR number - one credit per lookup.';
+
+export const ADVICE_REPLY =
+  'No. Ley Legal is a research tool for advocates: it finds the sections and judgments that bear on a question and shows where ' +
+  'each one comes from. It is not legal advice - read every authority in full and apply your own judgment before relying on it.';
+
+/**
  * "Which case held ...", "leading case on ...", "landmark judgment", and in
  * Hindi "सुप्रीम कोर्ट का फैसला" - a request for the judgment that decided a
  * point. Narrow on purpose: "decision" and "निर्णय" alone are also how a
@@ -571,6 +613,45 @@ export function asksWhichCase(text: string): boolean {
     // No \b: JavaScript's word boundary does not see Devanagari letters.
     /(?:सुप्रीम|उच्चतम|हाई|उच्च)\s*(?:कोर्ट|न्यायालय)\s*(?:का|के|की)\s*(?:फ़ैसल|फ़ैसल|फैसल|निर्णय)/.test(text)
   );
+}
+
+/**
+ * A question whose answer is one judgment, described rather than named: "which
+ * case laid down the basic structure doctrine", "custodial death under Article
+ * 32 - leading case", "Nandini Satpathy judgment ka citation aur holding",
+ * "यह किस मामले में तय हुआ?".
+ *
+ * The leading judgment came first for each in the live test of 8 Oct, and then
+ * nine unrelated ones followed - "9X Media vs TRAI" under Kesavananda (S-SL-01,
+ * 02, 03, 27, 28; J-PL-14; J-NL-24). For these the leading judgments are the
+ * answer, and nothing is added to them (precedents.service.ts). A question
+ * that asks for several - "judgments", "cases", "authorities" - is not one.
+ */
+export function asksForOneJudgment(text: string): boolean {
+  if (/\b(?:judg(?:e)?ments|cases|authorities|precedents|rulings|decisions|citations)\b/i.test(text)) return false;
+  return (
+    /\b(?:which|what)\s+(?:[\w'-]+\s+){0,3}?(?:case|judg(?:e)?ment)\b(?!\s+(?:law|status|number))/i.test(text) ||
+    /\b(?:leading|landmark)\s+(?:case|judg(?:e)?ment|decision)\b(?!\s+law)/i.test(text) ||
+    // "Nandini Satpathy judgment ka citation aur holding batao"
+    /\b(?:judg(?:e)?ment|case|faisla|faisle)\s+(?:ka|ki|ke)\s+(?:citation|holding|ratio)\b/i.test(text) ||
+    // No \b: JavaScript's word boundary does not see Devanagari letters.
+    /किस\s+(?:मामले|मुकदमे|मुक़दमे|केस|फ़ैसले|फैसले|निर्णय)|(?:मामले|केस|फ़ैसले|फैसले)\s+(?:का|की)\s+(?:साइटेशन|उद्धरण)/.test(text)
+  );
+}
+
+/**
+ * A request for authorities to argue from - "authorities on both sides", "for
+ * my memorial", "landmark judgments" - which the Supreme Court decides.
+ *
+ * The advocate's own High Court is searched for every topic question and put
+ * first. For these it filled the list with recent bail orders that had nothing
+ * to do with the proposition: "authorities for 'bail is the rule, jail is the
+ * exception' for my memorial" got seven Delhi High Court bail orders under
+ * Balchand, Sanjay Chandra and Arnesh Kumar (live test, 8 Oct, S-MT-03; S-MT-02
+ * the same).
+ */
+export function seeksAuthorities(text: string): boolean {
+  return /\b(?:authorit(?:y|ies)|memorial|moot|landmark|leading)\b/i.test(text);
 }
 
 export function asksAboutNamedJudgment(text: string): boolean {

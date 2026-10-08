@@ -77,3 +77,38 @@ export function cnrNeededReply(typed: string | null, match: CaseNumberMatch | nu
   }
   return [`To check a case, I need its CNR. ${how}`, '', free].join('\n');
 }
+
+/**
+ * A question asked in the same message as a CNR, other than its status - or
+ * null.
+ *
+ * "CNR DLCT010012342024 — what's the status and which Arbitration Act section
+ * governs interim relief?" got the status card, and the second half was dropped
+ * without a word (live tests, 4 and 7 Oct, C-07, C-15). The status is still the
+ * answer; the reply now says which part it did not answer (otherQuestionNote).
+ *
+ * Only a question about the law: a "which", "what", "how", "can" or "kya"
+ * clause naming a section, an Act, a provision, bail, a punishment, a remedy or
+ * a judgment. "CNR ... case under section 138 NI Act, what's the status?" asks
+ * one thing.
+ */
+export function otherQuestionWithCnr(question: string, cnr: string): string | null {
+  const cnrTyped = new RegExp(String.raw`(?:\bcnr\b[\s.:#-]*(?:no\.?|number)?[\s.:#-]*)?` + cnr.split('').join(String.raw`[\s-]*`), 'i');
+  const rest = question
+    .replace(cnrTyped, ' ')
+    .replace(
+      /\b(?:what(?:'s|\s+is)\s+(?:the\s+)?(?:current\s+|latest\s+|present\s+)?(?:status|stage|next\s+(?:hearing\s+)?date)(?:\s+of\s+(?:this|the|my)\s+case)?|(?:case\s+)?status\s+(?:kya\s+hai|batao|bataiye|please)|(?:check|get|show|tell\s+me|give\s+me)\s+(?:the\s+)?(?:case\s+)?status)\b/gi,
+      ' ',
+    )
+    .replace(/^[\s—–\-,;:.?!]*(?:(?:and|also|plus|aur|then)\b[\s,]*)*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const asksLaw =
+    /\b(?:which|what|how|can|does|do|is|are|explain|kaunsa|kaun\s*sa|kya)\b[^?]{0,80}?\b(?:sections?|articles?|acts?|provisions?|law|bail|punishment|remed(?:y|ies)|relief|judg(?:e)?ments?|precedents?|limitation|appeal|dhara)\b/i;
+  return rest.length >= 10 && asksLaw.test(rest) ? rest : null;
+}
+
+/** Said with the case status when the message also asked something else (otherQuestionWithCnr). */
+export function otherQuestionNote(other: string): string {
+  return `Your message also asked: "${other}" This reply covers only the case status - send that question on its own and Ley Legal will answer it.`;
+}

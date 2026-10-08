@@ -88,7 +88,7 @@ export interface SessionContext {
    */
   precedentNamedCase?: { name: string; found: boolean };
   /** Carried so later pages say how the list is ordered, as the first did. */
-  precedentGrouping?: { homeCourt: string | null; byCourt?: false; leading?: number };
+  precedentGrouping?: { homeCourt: string | null; byCourt?: false; leading?: number; onlyLeading?: true };
 }
 
 export interface SessionUser {

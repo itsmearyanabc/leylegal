@@ -271,12 +271,20 @@ describe('the number of a new-code section with the subject of the old one (T-01
         '*SECTION:* BNS 103 - Punishment for murder',
     );
     const system: string = registry.complete.mock.calls[0][0].system;
-    expect(system).toContain('The advocate asked about *BNS Section 103 - the advocate wrote BNS 302, which is a different provision');
-    expect(answer.statutes.map((s) => `${s.act_code} ${s.section_number}`)).toEqual(['BNS 103', 'BNS 302']);
+    expect(system).toContain(
+      'The advocate asked about *BNS Section 103* - the advocate wrote BNS 302, which is a different provision ' +
+        '("Uttering words, etc., with deliberate intent to wound religious feelings of any person"). ' +
+        'A line saying so is already printed above your answer: do not repeat it, and do not explain BNS 302. Explain *BNS Section 103*.',
+    );
+    // Only the section the subject belongs to is given: with BNS 302 beside
+    // it, the body explained BNS 302 under the right lead line (live, 8 Oct).
+    expect(answer.statutes.map((s) => `${s.act_code} ${s.section_number}`)).toEqual(['BNS 103']);
+    expect(system).not.toContain('BNS Section 302 - Uttering words');
+    expect(system).toContain('BNS Section 103 - Punishment for murder');
   });
 
   it('works the same for hurt (T-04)', async () => {
-    const { rag } = build({
+    const { rag, registry } = build({
       search: (n, act) => (act === 'BNS' && n === '323' ? [BNS_323] : []),
       recodified: (act, n) => (act === 'IPC' && n === '323' ? [BNS_115] : []),
     });
@@ -284,6 +292,8 @@ describe('the number of a new-code section with the subject of the old one (T-01
     const answer = await rag.answer(intent({ actCode: 'BNS', sectionNumber: '323', rawText: 'BNS 323 mein hurt ki saza kitni hai?' }) as never);
 
     expect(answer.text).toContain('The section on what you asked about is *BNS 115* ("Voluntarily causing hurt"), formerly IPC 323 (now BNS 115(2)).');
+    expect(answer.statutes.map((s) => `${s.act_code} ${s.section_number}`)).toEqual(['BNS 115']);
+    expect(registry.complete.mock.calls[0][0].system).not.toContain('BNS Section 323 - Dishonest or fraudulent removal');
   });
 
   it('looks at the lettered sections of the same number - IPC 120A and 120B for conspiracy (T-12)', async () => {

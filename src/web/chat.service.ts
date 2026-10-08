@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService } from '../ai/intent.service';
+import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService, productReply } from '../ai/intent.service';
 import { extractCnr } from '../ai/legal-patterns';
 import { costLine, impossibleCitation, impossibleCitationHindi, UnverifiedInfo, WebFallbackService } from '../ai/web-fallback';
 import {
+  JUDGMENT_SEARCH_UNAVAILABLE,
+  JUDGMENT_SEARCH_UNAVAILABLE_HI,
   NOT_AVAILABLE,
   PrecedentsService,
   legalPrinciple,
@@ -20,7 +22,7 @@ import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { ChatRepository } from '../database/repositories/chat.repository';
 import { ChatMessageRow, PrecedentRow, UserRow } from '../database/types';
 import { forBrowser } from '../ecourts/for-browser';
-import { caseNumberIn, cnrNeededReply, matchEarlierCase } from '../ecourts/cnr-help';
+import { caseNumberIn, cnrNeededReply, matchEarlierCase, otherQuestionNote, otherQuestionWithCnr } from '../ecourts/cnr-help';
 import { CnrNotFoundError, EcourtsService } from '../ecourts/ecourts.service';
 import { StageChannel } from './stage-channel';
 
@@ -253,14 +255,16 @@ export class ChatService {
       return;
     }
 
-    // An assignment to be written is declined before anything is charged: the
-    // reply is fixed, and it delivers no research (intent.service.ts).
-    if (asksToWriteAssignment(question)) {
+    // An assignment to be written, a feature Ley Legal does not have, a question
+    // about Ley Legal itself: answered before anything is charged - the reply
+    // is fixed, and it delivers no research (intent.service.ts, productReply).
+    const fixedReply = asksToWriteAssignment(question) ? ASSIGNMENT_REPLY : productReply(question);
+    if (fixedReply) {
       const message = await this.chats.appendMessage({
         threadId,
         userId: user.id,
         role: 'assistant',
-        content: `${ASSIGNMENT_REPLY} ${costLine(0, false)}`,
+        content: `${fixedReply} ${costLine(0, false)}`,
         intent: 'UNSUPPORTED',
         creditsCharged: 0,
       });
@@ -426,18 +430,21 @@ export class ChatService {
 
     try {
       const status = await this.ecourts.lookup(cnr);
+      // Something else asked in the same message is named, not dropped (cnr-help.ts).
+      const other = otherQuestionWithCnr(question, cnr);
+      const note = other ? otherQuestionNote(other) : null;
 
       const message = await this.chats.appendMessage({
         threadId,
         userId: user.id,
         role: 'assistant',
-        content: `Case status for ${cnr}`,
+        content: note ? `Case status for ${cnr}\n\n${note}` : `Case status for ${cnr}`,
         intent: 'CASE_STATUS',
         // The whole record goes to the client as data. `mocked` travels with
         // it so the interface can label synthetic data as synthetic - an
         // advocate must never mistake the mock adapter's output for a court
         // record.
-        structured: { kind: 'caseStatus', ...status },
+        structured: { kind: 'caseStatus', ...status, ...(note ? { note } : {}) },
         latencyMs: Date.now() - started,
         creditsCharged: decision.charged,
       });
@@ -544,9 +551,37 @@ export class ChatService {
     const searched = await this.precedents.search(intent, user.bar_council_state);
     const rows = searched.precedents;
 
+    // Indian Kanoon could not be reached and there is nothing local to search:
+    // said as it is, refunded, and not passed on to eCourts or the web - the
+    // search did not run, so nothing was "not found" (precedents.service.ts).
+    if (searched.unavailable) {
+      await this.credits.refund(user.id, user.role, reference, 'Judgment search unavailable');
+      const message = await this.chats.appendMessage({
+        threadId,
+        userId: user.id,
+        role: 'assistant',
+        content: /[ऀ-ॿ]/.test(question) ? JUDGMENT_SEARCH_UNAVAILABLE_HI : JUDGMENT_SEARCH_UNAVAILABLE,
+        intent: 'PRECEDENT_SEARCH',
+        latencyMs: searched.latencyMs,
+        creditsCharged: 0,
+      });
+      yield { type: 'answer', message: toPublic(message), credits: await this.credits.peek(user.id, user.role), charged: 0 };
+      return;
+    }
+
+    // A question asked in Devanagari is told "not found" in Hindi: "(2022) 40
+    // SCC 404" asked in Hindi got its refusal in English (live test, 7 Oct,
+    // J-FK-13). Case names and citations stay as written.
+    const hindi = /[ऀ-ॿ]/.test(question);
+    // A citation that cannot exist - a future year, an SCC volume no year has -
+    // is said to be impossible, free, and never searched for on the web, which
+    // "found" another case for it (web-fallback.ts, impossibleCitation) - nor
+    // on eCourts, whose party lists would answer a name the citation came with.
+    const impossible = hindi ? impossibleCitationHindi(question) : impossibleCitation(question);
+
     // A named case with no judgment may still be a case - a district-court
     // matter rarely has a reported judgment. See party-search.ts.
-    const cases = searched.namedCase?.found ? null : await this.ecourts.casesForQuestion(question);
+    const cases = searched.namedCase?.found || (impossible && rows.length === 0) ? null : await this.ecourts.casesForQuestion(question);
 
     const citations = rows.map(
       (p) => p.neutral_citation ?? p.reporter_citations?.[0] ?? p.case_title,
@@ -562,16 +597,7 @@ export class ChatService {
     // one Kanoon call, which is cheaper than the support mail.
     let emptyReason: string | null = null;
     let unverified: UnverifiedInfo | null = null;
-    // A citation that cannot exist - a future year, an SCC volume no year has -
-    // is said to be impossible, free, and never searched for on the web, which
-    // "found" another case for it (web-fallback.ts, impossibleCitation).
-    let impossible: string | null = null;
-    // A question asked in Devanagari is told "not found" in Hindi: "(2022) 40
-    // SCC 404" asked in Hindi got its refusal in English (live test, 7 Oct,
-    // J-FK-13). Case names and citations stay as written.
-    const hindi = /[ऀ-ॿ]/.test(question);
     if (rows.length === 0 && !cases) {
-      impossible = hindi ? impossibleCitationHindi(question) : impossibleCitation(question);
       // Nothing from Kanoon or eCourts: what the web has, apart and marked
       // unverified, for one credit (web-fallback.ts) - or the refund.
       if (!impossible) {
@@ -785,13 +811,25 @@ export class ChatService {
           sectionNumber: s.section_number,
           sectionTitle: s.section_title,
         })),
-        sources: answer.passages.map((p) => ({
-          caseTitle: p.case_title,
-          citation: p.neutral_citation ?? p.reporter_citations?.[0] ?? null,
-          court: p.court_name,
-          date: p.judgment_date,
-          paragraph: p.para_number,
-        })),
+        sources: [
+          ...answer.passages.map((p) => ({
+            caseTitle: p.case_title,
+            citation: p.neutral_citation ?? p.reporter_citations?.[0] ?? null,
+            court: p.court_name,
+            date: p.judgment_date,
+            paragraph: p.para_number,
+          })),
+          // The judgments found on Indian Kanoon that the answer names, with
+          // their links (rag.service.ts, answerPointOfLaw).
+          ...(answer.judgments ?? []).map((j) => ({
+            caseTitle: j.case_title,
+            citation: j.reporter_citations?.[0] ?? null,
+            court: j.court_name,
+            date: j.judgment_date,
+            paragraph: null,
+            url: j.source_url,
+          })),
+        ],
         // Shown after the answer, in its own marked section - never as part of it.
         unverified,
       },

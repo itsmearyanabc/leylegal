@@ -1,12 +1,14 @@
 import research from './__fixtures__/research-6oct.json';
 import { PrecedentRow } from '../database/types';
 import {
+  asksIfStillGoodLaw,
   leadingFirst,
   LeadingJudgment,
   leadingJudgmentQueries,
   MAX_LEADING,
   parseLeadingJudgments,
   pickLeadingJudgment,
+  textOverrules,
 } from './leading-judgments';
 import { kanoonQueries, orderingNote, PrecedentsService, priorityQueries, topicQuery } from './precedents.service';
 
@@ -285,5 +287,178 @@ describe('a name the model wrote with "and Others" and brackets', () => {
     const sushila: LeadingJudgment = { name: 'Sushila Aggarwal and Others v. State (NCT of Delhi) and Another', year: 2020, court: 'Supreme Court' };
     const p1 = research.P1.rows as Fixture[];
     expect(pickLeadingJudgment(sushila, [row(p1[1])])?.judgment_id).toBe('kanoon:123660783');
+  });
+});
+
+/**
+ * A question whose answer is one judgment (intent.service.ts, asksForOneJudgment).
+ * Live test of 8 Oct: Kesavananda came first for "which case laid down the
+ * basic structure doctrine", then nine unrelated judgments - four of them the
+ * Delhi High Court's (S-SL-01). Titles and courts are the ones listed that day.
+ */
+describe('a question that asks for one judgment', () => {
+  const kesavananda = row(['kanoon:2001', 'Kesavananda Bharati Sripadagalvaru And Ors vs State Of Kerala And Anr', '1973-04-24', 'Supreme Court of India'], 1, 9000);
+  const padding = [
+    row(['kanoon:2002', '9X Media Pvt. Ltd. & Ors vs Telecom Regulatory Authority Of India', '2024-05-01', 'Delhi High Court'], 1),
+    row(['kanoon:2003', 'R P Agrawal vs The Union Of India Through The Secretary', '2023-03-01', 'Delhi High Court'], 2),
+    row(['kanoon:2004', 'Modern Dental College & Res.Cen. & Ors vs State Of Madhya Pradesh', '2016-05-02', 'Supreme Court of India'], 3),
+  ];
+  const NAMES_KESAVANANDA = JSON.stringify({ cases: [{ name: 'Kesavananda Bharati v. State of Kerala', year: 1973, court: 'Supreme Court' }] });
+
+  function build(answer: string, titleRows: PrecedentRow[]) {
+    const search = jest.fn(async (query: string) => (query.includes('title:') ? titleRows : padding));
+    const complete = jest.fn().mockResolvedValue({ text: answer, model: 'gpt-4.1', inputTokens: 0, outputTokens: 0 });
+    const service = new PrecedentsService(
+      {} as never,
+      {} as never,
+      { isConfigured: true, isDegraded: false, search, documentHeader: jest.fn() } as never,
+      { get: () => 'kanoon', getNumber: (_k: string, d: number) => d } as never,
+      { isRouterMocked: true, isSynthesisMocked: false, complete } as never,
+      { KANOON_ENRICH_MAX: 0, PRECEDENT_MAX_RESULTS: 10, PRECEDENT_PAGE_SIZE: 5 } as never,
+    );
+    return { service, search };
+  }
+  const asked = (text: string) =>
+    ({ intent: 'PRECEDENT_SEARCH', sectionNumber: null, actCode: null, cnrNumber: null, confidence: 0.9, rawText: text, searchQuery: 'basic structure doctrine' }) as never;
+
+  it('is answered by the leading judgment alone, and the home court is not searched (S-SL-01)', async () => {
+    const { service, search } = build(NAMES_KESAVANANDA, [kesavananda]);
+
+    const result = await service.search(asked('Which case laid down the basic structure doctrine?'), 'Delhi');
+
+    expect(result.precedents.map((r) => r.case_title)).toEqual(['Kesavananda Bharati Sripadagalvaru And Ors vs State Of Kerala And Anr']);
+    expect(result.grouping).toEqual({ homeCourt: null, byCourt: false, leading: 1, onlyLeading: true });
+    expect(orderingNote(result.grouping)).toBe('the leading judgment, named by AI and found on Indian Kanoon');
+    expect(search.mock.calls.map((c) => c[0]).some((q) => q.includes('doctypes:delhi'))).toBe(false);
+  });
+
+  it('is the list as before, without the home court first, when no leading judgment is found', async () => {
+    const { service } = build(NAMES_KESAVANANDA, []);
+
+    const result = await service.search(asked('Which case laid down the basic structure doctrine?'), 'Delhi');
+
+    expect(result.precedents.length).toBeGreaterThan(1);
+    expect(result.grouping).toEqual({ homeCourt: null });
+    // The Supreme Court first: the Delhi High Court is not promoted.
+    expect(result.precedents[0].court_name).toBe('Supreme Court of India');
+  });
+
+  it('leaves a research question with its home court (P1)', async () => {
+    const { service, search } = build(NAMES_KESAVANANDA, [kesavananda]);
+
+    await service.search(asked('basic structure doctrine judgments'), 'Delhi');
+
+    expect(search.mock.calls.map((c) => c[0]).some((q) => q.includes('doctypes:delhi'))).toBe(true);
+  });
+
+  it('does not search the home court for authorities to argue from (S-MT-03)', async () => {
+    const { service, search } = build(NAMES_KESAVANANDA, []);
+
+    await service.search(asked("I need authorities for 'bail is the rule, jail is the exception' for my memorial — with full citations."), 'Delhi');
+
+    expect(search.mock.calls.map((c) => c[0]).some((q) => q.includes('doctypes:delhi'))).toBe(false);
+  });
+});
+
+describe('a judgment from before the Constitution (S-SL-20)', () => {
+  it('is believed from 1860: the Privy Council decided Mahbub Shah in 1945', () => {
+    const text = JSON.stringify({
+      cases: [
+        { name: 'Mahbub Shah v. Emperor', year: 1945, court: 'Privy Council' },
+        { name: 'Barendra Kumar Ghosh v. King Emperor', year: 1924, court: 'Privy Council' },
+        { name: 'Someone v. The Crown', year: 1850, court: 'Privy Council' },
+      ],
+    });
+    expect(parseLeadingJudgments(text, 2026)).toEqual([
+      { name: 'Mahbub Shah v. Emperor', year: 1945, court: 'Privy Council' },
+      { name: 'Barendra Kumar Ghosh v. King Emperor', year: 1924, court: 'Privy Council' },
+    ]);
+  });
+
+  it('is looked for by title and year, in no court Kanoon has no slug for', () => {
+    expect(leadingJudgmentQueries({ name: 'Mahbub Shah v. Emperor', year: 1945, court: 'Privy Council' }, null)).toEqual([
+      'fromdate: 1-1-1944 todate: 31-12-1946 title: Mahbub Shah Emperor',
+      'fromdate: 1-1-1944 todate: 31-12-1946 title: Mahbub Shah',
+    ]);
+  });
+});
+
+/**
+ * "Is X still good law?" (precedents.service.ts, overruledBy). Live test of 8
+ * Oct: Shafhi Mohammad, Suresh Kumar Koushal and P.V. Narasimha Rao were each
+ * returned alone, with no word of the judgments that overruled them (J-GL-01,
+ * 02, 08).
+ */
+describe('a judgment asked about as "still good law?"', () => {
+  /** The Supreme Court Reports headnote of Arjun Panditrao Khotkar (2020), as published. */
+  const ARJUN_HEADNOTE = 'Shafhi Mohammad and the judgment dtd. 03.04.18 reported as [2018] 3 SCR 1096 are overruled.';
+  const shafhi = row(['kanoon:3001', 'Shafhi Mohammad vs The State Of Himachal Pradesh', '2018-01-30', 'Supreme Court of India']);
+  const arjun = row(['kanoon:3002', 'Arjun Panditrao Khotkar vs Kailash Kushanrao Gorantyal', '2020-07-14', 'Supreme Court of India']);
+  const NAMES_ARJUN = JSON.stringify({ cases: [{ name: 'Arjun Panditrao Khotkar v. Kailash Kushanrao Gorantyal', year: 2020, court: 'Supreme Court' }] });
+  const QUESTION = 'Is Shafhi Mohammad v. State of H.P. still good law on the Section 65B certificate?';
+
+  function build(answer: string, document: string) {
+    const search = jest.fn(async (query: string) => (query.includes('Arjun') ? [arjun] : query.includes('Shafhi') ? [shafhi] : []));
+    const complete = jest.fn().mockResolvedValue({ text: answer, model: 'gpt-4.1', inputTokens: 0, outputTokens: 0 });
+    const lawDocument = jest.fn().mockResolvedValue(document);
+    const service = new PrecedentsService(
+      {} as never,
+      {} as never,
+      { isConfigured: true, isDegraded: false, search, documentHeader: jest.fn(), lawDocument } as never,
+      { get: () => 'kanoon', getNumber: (_k: string, d: number) => d } as never,
+      { isRouterMocked: true, isSynthesisMocked: false, complete } as never,
+      { KANOON_ENRICH_MAX: 0, PRECEDENT_MAX_RESULTS: 10, PRECEDENT_PAGE_SIZE: 5, KANOON_TIMEOUT_MS: 15000 } as never,
+    );
+    return { service, complete, lawDocument };
+  }
+  const asked = { intent: 'PRECEDENT_SEARCH', sectionNumber: null, actCode: null, cnrNumber: null, confidence: 0.9, rawText: QUESTION, searchQuery: QUESTION } as never;
+
+  it('is recognised', () => {
+    expect(asksIfStillGoodLaw(QUESTION)).toBe(true);
+    expect(asksIfStillGoodLaw('Is Suresh Kumar Koushal v. Naz Foundation still good law?')).toBe(true);
+    expect(asksIfStillGoodLaw('Summarise Suresh Kumar Koushal v. Naz Foundation')).toBe(false);
+  });
+
+  it('lists the judgment that overruled it, after it, and says so (J-GL-01)', async () => {
+    const { service, lawDocument } = build(NAMES_ARJUN, `<p>${ARJUN_HEADNOTE}</p>`);
+
+    const result = await service.search(asked, null);
+
+    expect(lawDocument).toHaveBeenCalledWith(3002, 15000);
+    expect(result.precedents.map((r) => r.case_title)).toEqual([
+      'Shafhi Mohammad vs The State Of Himachal Pradesh',
+      'Arjun Panditrao Khotkar vs Kailash Kushanrao Gorantyal',
+    ]);
+    expect(result.notes).toEqual([
+      'Overruled: Shafhi Mohammad vs The State Of Himachal Pradesh was overruled by Arjun Panditrao Khotkar vs Kailash Kushanrao Gorantyal (2020), listed below it. ' +
+        'The later judgment was named by AI and found on Indian Kanoon, and its text says the earlier one is overruled.',
+    ]);
+  });
+
+  it('claims nothing when the later judgment\'s text does not say it overruled the earlier one', async () => {
+    const { service } = build(NAMES_ARJUN, '<p>The certificate under Section 65B(4) is a condition precedent to admissibility.</p>');
+
+    const result = await service.search(asked, null);
+
+    expect(result.precedents.map((r) => r.judgment_id)).toEqual(['kanoon:3001']);
+    expect(result.notes?.[0]).toMatch(/^Ley Legal did not find a later judgment overruling Shafhi Mohammad vs The State Of Himachal Pradesh\. That does not confirm/);
+  });
+
+  it('claims nothing when the model names no overruling judgment', async () => {
+    const { service, lawDocument } = build(JSON.stringify({ cases: [] }), `<p>${ARJUN_HEADNOTE}</p>`);
+
+    const result = await service.search(asked, null);
+
+    expect(lawDocument).not.toHaveBeenCalled();
+    expect(result.precedents).toHaveLength(1);
+    expect(result.notes?.[0]).toMatch(/^Ley Legal did not find a later judgment overruling/);
+  });
+
+  it('reads an overruling only where the text says it, not where it denies it', () => {
+    expect(textOverrules(`<p>${ARJUN_HEADNOTE}</p>`, ['Shafhi', 'Mohammad'])).toBe(true);
+    expect(textOverrules('<p>The view in Shafhi Mohammad has not been overruled and is followed here.</p>', ['Shafhi', 'Mohammad'])).toBe(false);
+    expect(textOverrules('<p>Shafhi Mohammad is not overruled.</p>', ['Shafhi', 'Mohammad'])).toBe(false);
+    // Overruled, but not that judgment.
+    expect(textOverrules(`<p>${ARJUN_HEADNOTE}</p>`, ['Suresh', 'Kumar', 'Koushal'])).toBe(false);
   });
 });

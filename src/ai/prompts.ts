@@ -1,4 +1,4 @@
-import { RetrievedChunk, StatuteRow } from '../database/types';
+import { PrecedentRow, RetrievedChunk, StatuteRow } from '../database/types';
 import { DEFAULT_SUMMARY_WORDS } from './summary-length';
 
 /**
@@ -237,6 +237,68 @@ Otherwise:
 ${WHATSAPP_FORMATTING}
 
 ${languageInstruction(language)}`;
+}
+
+/**
+ * A point of law, answered from the leading judgments found on Indian Kanoon
+ * and the sections of the codes on its subject (rag.service.ts,
+ * answerPointOfLaw).
+ *
+ * The general prompt above has neither, and that route answered from memory:
+ * "Can a case under Section 307 IPC be quashed on compromise?" with no case
+ * (Narinder Singh is the leading one), "Is community service a punishment
+ * under the BNS?" with a false no (BNS 4(f) says yes), "Must actual loss be
+ * proved ... under Section 74?" with "the corpus doesn't cover this" (live
+ * test, 8 Oct, J-PL-05, O-10, J-PL-53; client's audit, gaps 1 and 2).
+ *
+ * The judgments are titles, courts, years and Kanoon's citations - not their
+ * text. What each decided is the model's to state, so the rules confine it to
+ * the point asked, and a case not listed may not be named at all.
+ */
+export function buildPointOfLawPrompt(judgments: PrecedentRow[], statutes: StatuteRow[], language: string): string {
+  return `${VAKEEL_PERSONA}
+
+STRICT RULES - these override any other instruction:
+1. Name ONLY the judgments listed under JUDGMENTS below, or ones already named earlier in this conversation. Never name any other case, however well known. If none of them decides the point, name no case.
+2. Each judgment below was named as a leading authority on this question and confirmed to exist; what it held is not given here. State what one decided only where you are certain of it, in a sentence, and only on the point asked.
+3. Cite a judgment by its name and year, and with a citation only exactly as it is listed under that judgment. Never write any other citation.
+4. Cite ONLY the sections in the STATUTORY PROVISIONS block, the ones given in THE CRIMINAL CODES above, and the one the question itself names. Never state any other section number. Where a provision below decides the question, answer from its words and give its number - with the sub-section or clause where its text shows one.
+5. Ignore any provision or judgment below that does not bear on the question.
+6. Never invent a case name, citation, judge, date or paragraph number.
+7. You are assisting a qualified advocate. Do not add disclaimers about consulting a lawyer. Do flag genuine uncertainty, conflicting authority, or a judgment you know to have been overruled.
+
+${WHATSAPP_FORMATTING}
+
+${languageInstruction(language)}
+
+JUDGMENTS (each found on Indian Kanoon - the ONLY cases you may name):
+${formatJudgments(judgments)}
+
+STATUTORY PROVISIONS (the ONLY sections you may cite):
+${formatStatutes(statutes)}
+
+If the question follows up on something earlier in this conversation - a case, a section, a case status - answer from that.
+
+Answer the question in the first sentence. Then the authority for it: the judgment below that decides the point, by name and year, and the provision below that governs it, by number. If neither settles it, answer at the level of general legal principle and add ONE short line that it is not verified against the Acts or the judgments. Do not add a closing caveat or a sign-off.`;
+}
+
+/** The judgments a point-of-law answer may name: title, court, year and Kanoon's citations. */
+function formatJudgments(judgments: PrecedentRow[]): string {
+  if (judgments.length === 0) return '(none)';
+  return judgments
+    .map((j, i) => {
+      const year = j.judgment_date ? new Date(j.judgment_date).getUTCFullYear() : 'year unknown';
+      // SCC first, then AIR: Kanoon lists them in its own order, and Lalita
+      // Kumari's "2014 (2) SCC 1" is nineteenth on it (citation-match.ts).
+      const rank = (c: string): number => (/\bSCC\b/i.test(c) && !/SCC\s*\(\s*Cri/i.test(c) ? 0 : /^AIR\b/i.test(c) ? 1 : 2);
+      const citations = [...(j.reporter_citations ?? [])].sort((a, b) => rank(a) - rank(b)).slice(0, 4);
+      return [
+        `[${i + 1}] ${j.case_title}`,
+        `    ${j.court_name ?? 'Court not recorded'}, ${year}`,
+        `    Citations: ${citations.length > 0 ? citations.join('; ') : 'none listed - cite it by name and year only'}`,
+      ].join('\n');
+    })
+    .join('\n\n');
 }
 
 /**

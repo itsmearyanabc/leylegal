@@ -199,6 +199,10 @@ export function extractCaseName(text: string): CaseName | null {
  */
 const REQUEST_WORDS = new Set([
   'give', 'tell', 'show', 'share', 'send', 'provide', 'explain', 'find', 'get', 'me', 'us', 'the', 'a', 'an',
+  // "Give me the link to the full text of Lalita Kumari v. Govt. of U.P." was
+  // a topic search, and the judgment came first in a list of ten (live test,
+  // 7 and 8 Oct, B-14).
+  'link', 'links', 'url', 'pdf', 'copy', 'text', 'to', 'read', 'download', 'open',
   'full', 'complete', 'summary', 'summarise', 'summarize', 'citation', 'cite', 'scc', 'air', 'holding', 'ratio',
   'judgment', 'judgement', 'decision', 'case', 'order', 'status', 'details', 'detail', 'facts', 'supreme', 'high',
   'court', 'apex', 'please', 'kindly', 'what', 'whats', 'is', 'was', 'latest', 'leading', 'landmark', 'key',
@@ -365,6 +369,18 @@ export function mentionsCase(name: CaseName, text: string): boolean {
   const respondent = signal(name.respondent);
   const parties = petitioner.length === 0 || overlap(petitioner, found) >= 0.5;
   return parties && (respondent.length === 0 || overlap(respondent, found) > 0);
+}
+
+/**
+ * Whether an answer names this judgment: as mentionsCase, and the petitioner's
+ * first distinctive word is in it. "*Narinder Singh v. State of Punjab*" names
+ * Gian Singh v. State of Punjab too by mentionsCase's measure - "Singh" is half
+ * of "Gian Singh", and "Punjab" is there.
+ */
+export function namesCase(name: CaseName, text: string): boolean {
+  const petitioner = signal(name.petitioner);
+  if (petitioner.length === 0) return false;
+  return signal(text).some((word) => sameName(petitioner[0], word)) && mentionsCase(name, text);
 }
 
 /**
