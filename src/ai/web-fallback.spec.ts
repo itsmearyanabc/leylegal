@@ -3,6 +3,8 @@ import {
   admitsNotFound,
   costLine,
   impossibleCitation,
+  impossibleCitationHindi,
+  namesACase,
   parseWebAnswer,
   SCC_MAX_VOLUMES,
   UNVERIFIED_NOTE,
@@ -244,5 +246,82 @@ describe('the bench', () => {
     expect(webSearchRequest('gpt-4.1-mini', 'judgment', 'AIR 1962 SC 605').instructions).toContain(
       '- Do not name the judges or describe the bench.',
     );
+  });
+});
+
+/**
+ * Fix 1b - from the live check of 7 October 2026.
+ *
+ * J-CL-03, J-CL-05 and J-CL-07: the web answer described a judgment without
+ * naming it (only a source link's title did), and J-CL-03 gave a wrong date.
+ * C-06: a made-up CNR was said to be "registered in the eCourts system", for a
+ * credit. The texts below follow the graded answers; the exact wording was not
+ * kept.
+ */
+describe('a judgment answer must say which judgment it is about', () => {
+  const unnamed = [
+    ['J-CL-03', 'The Supreme Court laid down eleven requirements to be followed in all cases of arrest or detention on 18 January 1997.'],
+    ['J-CL-05', 'A nine-judge bench held on 24 August 2017 that the right to privacy is a fundamental right under Article 21.'],
+    ['J-CL-07', 'On 24 November 1961, in Criminal Appeal No. 195 of 1960, the Court examined grave and sudden provocation.'],
+  ];
+
+  it.each(unnamed)('drops %s, which names no case', (_, text) => {
+    expect(namesACase(text)).toBe(false);
+    expect(parseWebAnswer(withText(text), 'judgment')).toBeNull();
+  });
+
+  it.each([
+    ['Maneka Gandhi', AUDIT_4_OCT.maneka],
+    ['Lalita Kumari', AUDIT_4_OCT.lalitaKumari],
+    ['Golaknath', AUDIT_4_OCT.golaknath],
+    ['Nanavati', 'K.M. Nanavati v. State of Maharashtra, AIR 1962 SC 605, held that the defence of grave and sudden provocation failed.'],
+    ['a "vs" title', 'Arnesh Kumar vs State of Bihar (2014) 8 SCC 273 laid down arrest guidelines.'],
+    ['In re', 'In re Arundhati Roy, (2002) 3 SCC 343, concerned contempt of court.'],
+  ])('keeps an answer that names the case: %s', (_, text) => {
+    expect(namesACase(text)).toBe(true);
+    expect(parseWebAnswer(withText(text), 'judgment')?.text).toBe(text);
+  });
+
+  it('does not ask a provision answer to name a case', () => {
+    expect(parseWebAnswer(realResponse, 'provision')).not.toBeNull();
+  });
+
+  it('tells the search to begin with the case name, and to date only from a source', () => {
+    const { instructions } = webSearchRequest('gpt-4.1-mini', 'judgment', '(1997) 1 SCC 416');
+    expect(instructions).toContain('- For a judgment, begin with its full case name and citation exactly as the pages you cite give them.');
+    expect(instructions).toContain('- Give a date only if a page you cite states that date for this judgment.');
+  });
+});
+
+describe('a CNR eCourts does not know (C-06)', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  it('is not looked for on the web', async () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as never;
+    const env = { WEB_FALLBACK: 'on', OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: '', WEB_SEARCH_MODEL: 'gpt-4.1-mini', WEB_FALLBACK_TIMEOUT_MS: 25000 } as never;
+
+    expect(await new WebFallbackService(env).find('cnr', 'Status of CNR UPLK010999992023', 'UPLK010999992023')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('a citation that cannot exist, asked in Hindi (J-FK-13)', () => {
+  const now = new Date('2026-10-07T12:00:00+05:30');
+
+  it('gives the reason in Hindi', () => {
+    expect(impossibleCitationHindi("सुप्रीम कोर्ट के 'राजेंद्र कुमार बनाम भारत संघ, (2022) 40 SCC 404' फैसले में क्या कहा गया?", now)).toBe(
+      'सुप्रीम कोर्ट केसेज़ (SCC) के किसी भी वर्ष में खंड (volume) 40 नहीं होता',
+    );
+    expect(impossibleCitationHindi('(2028) 1 SCC 1 का सार', now)).toBe('वर्ष 2028 अभी आया ही नहीं है');
+  });
+
+  it('agrees with the English reason on what is impossible', () => {
+    for (const text of ['(2022) 40 SCC 404', '(2028) 1 SCC 1', '(2014) 2 SCC 1', '1992 Supp (1) SCC 335']) {
+      expect(impossibleCitationHindi(text, now) === null).toBe(impossibleCitation(text, now) === null);
+    }
   });
 });

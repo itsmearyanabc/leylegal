@@ -569,19 +569,76 @@ describe('when no verified source has the answer', () => {
     expect(answer?.charged).toBe(0);
   });
 
-  it('searches the web for a CNR eCourts has no record of, for the credit already taken', async () => {
+  it('does not search the web for a CNR eCourts has no record of - it refunds (live test, 7 Oct, C-06)', async () => {
+    // The web said a made-up CNR "is registered in the eCourts system", for a
+    // credit. eCourts is the record; when it has nothing, there is nothing.
     const webFind = jest.fn().mockResolvedValue(found);
     const { service, credits } = build({
       intent: 'CASE_STATUS',
-      cnr: 'DLCT010012342024',
-      lookup: jest.fn().mockRejectedValue(new CnrNotFoundError('DLCT010012342024')),
+      cnr: 'UPLK010999992023',
+      lookup: jest.fn().mockRejectedValue(new CnrNotFoundError('UPLK010999992023')),
       webFind,
     });
 
-    const events = await ask(service, 'status of DLCT010012342024');
+    const events = await ask(service, 'Status of CNR UPLK010999992023');
 
-    expect(webFind).toHaveBeenCalledWith('cnr', 'status of DLCT010012342024', 'DLCT010012342024');
-    expect(credits.refund).not.toHaveBeenCalled();
-    expect(answers(events)).toBe('eCourts has no record of CNR DLCT010012342024.\n\n1 credit was charged for the unverified information below.');
+    expect(webFind).not.toHaveBeenCalled();
+    expect(credits.chargeUnverified).not.toHaveBeenCalled();
+    expect(credits.refund).toHaveBeenCalled();
+    expect(answers(events)).toBe('No case found for CNR UPLK010999992023. Check the 16-character number and try again.');
+    expect(events.some((e) => e.type === 'stage' && e.stage === 'searching-web')).toBe(false);
+  });
+
+  it('answers a question asked in Hindi in Hindi when the citation cannot exist (live test, 7 Oct, J-FK-13)', async () => {
+    const webFind = jest.fn().mockResolvedValue(found);
+    const { service, precedents } = build({ intent: 'PRECEDENT_SEARCH', precedents: [], webFind });
+    precedents.search.mockResolvedValue({
+      precedents: [], totalMatches: 0, lexicalOnly: false, source: 'kanoon', latencyMs: 1,
+      namedCase: { name: '(2022) 40 SCC 404', found: false },
+    });
+
+    const events = await ask(service, "सुप्रीम कोर्ट के 'राजेंद्र कुमार बनाम भारत संघ, (2022) 40 SCC 404' फैसले में क्या कहा गया?");
+
+    expect(webFind).not.toHaveBeenCalled();
+    expect(answers(events)).toBe(
+      'Ley Legal के स्रोतों में "(2022) 40 SCC 404" का कोई फ़ैसला नहीं मिला। पक्षकारों के नाम या उद्धरण (citation) जाँचें, या क़ानूनी प्रश्न अपने शब्दों में लिखें। ' +
+        'यह उद्धरण (citation) मौजूद नहीं हो सकता: सुप्रीम कोर्ट केसेज़ (SCC) के किसी भी वर्ष में खंड (volume) 40 नहीं होता। आपसे कोई क्रेडिट नहीं लिया गया।',
+    );
+  });
+
+  it('keeps the English message for a question asked in English', async () => {
+    const { service, precedents } = build({ intent: 'PRECEDENT_SEARCH', precedents: [] });
+    precedents.search.mockResolvedValue({
+      precedents: [], totalMatches: 0, lexicalOnly: false, source: 'kanoon', latencyMs: 1,
+      namedCase: { name: 'Ravindra Prasad Kushwaha vs State of Jharkhand', found: false },
+    });
+
+    const events = await ask(service, 'Summarise Ravindra Prasad Kushwaha v. State of Jharkhand');
+
+    expect(answers(events)).toBe(
+      'No judgment found for "Ravindra Prasad Kushwaha vs State of Jharkhand" in Ley Legal\'s sources. ' +
+        'Check the party names or the citation, or describe the point of law instead. You have not been charged.',
+    );
+  });
+});
+
+describe('notes above a judgment list (Fix 1b)', () => {
+  it('says the citation is not the named case\'s, above the case (J-FK-11)', async () => {
+    const { service, precedents } = build({ intent: 'PRECEDENT_SEARCH' });
+    precedents.search.mockResolvedValue({
+      precedents: [precedent('kanoon:2982624')], totalMatches: 1, lexicalOnly: false, source: 'kanoon', latencyMs: 1,
+      namedCase: { name: 'Arnesh Kumar vs State of Bihar', found: true },
+      notes: ['Indian Kanoon does not list (2019) 3 SCC 112 for this judgment. It lists: 2014 (8) SCC 273.'],
+    });
+
+    const events = await ask(service, 'Summarise Arnesh Kumar v. State of Bihar, (2019) 3 SCC 112');
+
+    expect(answers(events)).toBe(
+      'Indian Kanoon does not list (2019) 3 SCC 112 for this judgment. It lists: 2014 (8) SCC 273.\n\n1 authority on "q"',
+    );
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect((answer?.message.structured as { notes?: string[] } | null)?.notes).toEqual([
+      'Indian Kanoon does not list (2019) 3 SCC 112 for this judgment. It lists: 2014 (8) SCC 273.',
+    ]);
   });
 });

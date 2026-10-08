@@ -67,6 +67,8 @@ const INSTRUCTIONS = `You help Indian advocates. Ley Legal's verified sources - 
 - Answer about the case or provision asked for, and nothing else. Never offer a different case, a "similar" case or a corrected citation in its place.
 - Indian law only: leave out anything about other countries.
 - Do not name the judges or describe the bench.
+- For a judgment, begin with its full case name and citation exactly as the pages you cite give them.
+- Give a date only if a page you cite states that date for this judgment.
 - If the pages you find do not answer the question - including when the case or citation asked for cannot be found - reply with exactly: NO_RESULT`;
 
 /**
@@ -104,15 +106,36 @@ function indianYear(now: Date): number {
  * to the search - refusing a real citation would be its own wrong answer.
  */
 export function impossibleCitation(text: string, now: Date = new Date()): string | null {
+  const reason = impossibleCitationReason(text, now);
+  if (!reason) return null;
+  return reason.kind === 'volume'
+    ? `no year of the Supreme Court Cases (SCC) reports has a volume ${reason.volume}`
+    : `${reason.year} is still in the future`;
+}
+
+/**
+ * The same reason in Hindi, for a question asked in Devanagari. "(2022) 40 SCC
+ * 404" asked in Hindi got its refusal in English (live test, 7 Oct, J-FK-13).
+ */
+export function impossibleCitationHindi(text: string, now: Date = new Date()): string | null {
+  const reason = impossibleCitationReason(text, now);
+  if (!reason) return null;
+  return reason.kind === 'volume'
+    ? `सुप्रीम कोर्ट केसेज़ (SCC) के किसी भी वर्ष में खंड (volume) ${reason.volume} नहीं होता`
+    : `वर्ष ${reason.year} अभी आया ही नहीं है`;
+}
+
+export function impossibleCitationReason(
+  text: string,
+  now: Date = new Date(),
+): { kind: 'volume'; volume: number } | { kind: 'future'; year: number } | null {
   const thisYear = indianYear(now);
 
   // (2022) 40 SCC 404  /  2022 (40) SCC 404
   const scc = /\(\s*(\d{4})\s*\)\s*(\d{1,3})\s*SCC\b|\b(\d{4})\s*\(\s*(\d{1,3})\s*\)\s*SCC\b/gi;
   for (const match of text.matchAll(scc)) {
     const volume = Number(match[2] ?? match[4]);
-    if (volume > SCC_MAX_VOLUMES) {
-      return `no year of the Supreme Court Cases (SCC) reports has a volume ${volume}`;
-    }
+    if (volume > SCC_MAX_VOLUMES) return { kind: 'volume', volume };
   }
 
   // A year inside a citation: (2028) 1 SCC 1, AIR 2031 SC 5, 2027 INSC 12,
@@ -127,7 +150,7 @@ export function impossibleCitation(text: string, now: Date = new Date()): string
   );
   for (const match of text.matchAll(dated)) {
     const year = Number(match[1] ?? match[2] ?? match[3] ?? match[4]);
-    if (year > thisYear) return `${year} is still in the future`;
+    if (year > thisYear) return { kind: 'future', year };
   }
   return null;
 }
@@ -196,7 +219,21 @@ export function webSearchRequest(model: string, kind: WebFallbackKind, question:
  * it can cite. Output items: a web_search_call, then a message whose
  * output_text parts carry the text and url_citation annotations.
  */
-export function parseWebAnswer(payload: unknown): UnverifiedInfo | null {
+/**
+ * A case name in the answer: "X v. Y", "X vs Y", "X versus Y", "In re X".
+ *
+ * Asked "(1997) 1 SCC 416 - which judgment?", the web answer described the
+ * custody guidelines "issued on 18 January 1997" and never named the case; only
+ * a source link's title did, and the date was wrong - D.K. Basu was decided on
+ * 18 December 1996 (live test, 7 Oct, J-CL-03; J-CL-05 and J-CL-07 also named
+ * no case). An answer about a judgment that does not say which judgment cannot
+ * be checked by the advocate reading it, so it is not shown.
+ */
+export function namesACase(text: string): boolean {
+  return /\b[A-Z][\w.&'-]*(?:\s+[\w.&'(),-]+){0,8}?\s+(?:v\.?|vs\.?|versus)\s+[A-Z(]/.test(text) || /\bIn\s+re\b/i.test(text);
+}
+
+export function parseWebAnswer(payload: unknown, kind: WebFallbackKind | null = null): UnverifiedInfo | null {
   const output = (payload as { output?: unknown })?.output;
   if (!Array.isArray(output)) return null;
 
@@ -211,6 +248,7 @@ export function parseWebAnswer(payload: unknown): UnverifiedInfo | null {
     .trim();
   // "I couldn't find X. ... Y" is NO_RESULT followed by a substitute: see admitsNotFound.
   if (!text || /\bNO_RESULT\b/.test(text) || admitsNotFound(text)) return null;
+  if (kind === 'judgment' && !namesACase(text)) return null;
 
   const seen = new Set<string>();
   const sources: WebSource[] = [];
@@ -243,6 +281,18 @@ export class WebFallbackService {
    */
   async find(kind: WebFallbackKind, question: string, detail: string | null = null): Promise<UnverifiedInfo | null> {
     if (!this.isEnabled) return null;
+    /*
+     * Not for a CNR. eCourts is the record of every case a CNR names; when it
+     * has none, the web has nothing to add but guesses. "Status of CNR
+     * UPLK010999992023" - a made-up number - was answered "The case with CNR
+     * number UPLK010999992023 is registered in the eCourts system", for a
+     * credit (live test, 7 Oct, C-06). Both channels call this, so both stop
+     * here: the caller refunds and says no case was found.
+     */
+    if (kind === 'cnr') {
+      this.logger.info('Web search skipped: a CNR eCourts does not know is not looked for on the web');
+      return null;
+    }
     // A citation that cannot exist is not searched for: whatever the web
     // "finds" for it is another case (see impossibleCitation).
     const impossible = kind === 'judgment' ? impossibleCitation(question) : null;
@@ -265,7 +315,7 @@ export class WebFallbackService {
         this.logger.warn({ kind, status: response.status, body: body.slice(0, 300) }, 'Web search failed');
         return null;
       }
-      const found = parseWebAnswer(await response.json());
+      const found = parseWebAnswer(await response.json(), kind);
       this.logger.info({ kind, found: found !== null, sources: found?.sources.length ?? 0, ms: Date.now() - started }, 'Web search for unverified information');
       return found;
     } catch (err) {

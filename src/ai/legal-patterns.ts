@@ -315,6 +315,16 @@ const CITATION_PATTERNS: RegExp[] = [
   /\b(\d{4}\s*\(\d+\)\s*[A-Z][A-Za-z]*\s*\d+)\b/g,
   // (2020) 7 SCC 1 style with reporter variants
   /(\(\d{4}\)\s*\d+\s*[A-Z]{2,6}\s*\d+)/g,
+  /*
+   * 1992 Supp (1) SCC 335 - the SCC's supplementary volumes, and Kanoon's way
+   * of printing them, 1992 SCC (SUPP) 1 335.
+   *
+   * None of the patterns above reads "Supp", so "1992 Supp (1) SCC 335 - which
+   * judgment?" was not a citation at all: it went to a topic search and came
+   * back as "10 authorities on 1992 Supp (1) SCC 335", Indra Sawhney first, for
+   * two credits - Bhajan Lal was not in the list (live test, 7 Oct, J-CL-10).
+   */
+  /(\(?\d{4}\)?\s+Supp\.?\s*\(?\s*\d+\s*\)?\s*SCC\s+\d+|\d{4}\s+SCC\s*\(\s*Supp\.?\s*\)\s*\d+\s+\d+)/gi,
 ];
 
 /** Extract case citations from model output, deduplicated and trimmed. */

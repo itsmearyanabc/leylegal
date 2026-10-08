@@ -455,13 +455,21 @@ describe('the documented search operators, and falling back from them', () => {
     expect(result.precedents).toEqual([]);
   });
 
-  it('uses cite: for a pasted citation', async () => {
+  it('uses cite: for a pasted citation - in the spelling Kanoon prints, then as typed', async () => {
+    // Kanoon prints "AIR 1973 SUPREME COURT 1461"; its cite: operator matches
+    // its own spelling (citation-match.ts). Neither result carries the
+    // citation here, so both spellings are tried and nothing is found.
     const { service, kanoon } = build();
     kanoon.search.mockResolvedValue([mittal]);
 
-    await service.search(named('AIR 1973 SC 1461') as never);
+    const result = await service.search(named('AIR 1973 SC 1461') as never);
 
-    expect(kanoon.search.mock.calls[0][0]).toMatch(/^cite: AIR 1973 SC 1461/);
+    expect(kanoon.search.mock.calls.map((call) => call[0])).toEqual([
+      'cite: AIR 1973 SUPREME COURT 1461',
+      'cite: 1973 AIR 1461',
+      'cite: AIR 1973 SC 1461',
+    ]);
+    expect(result.namedCase).toEqual({ name: 'AIR 1973 SC 1461', found: false });
   });
 });
 
