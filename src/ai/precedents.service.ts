@@ -958,10 +958,19 @@ export class PrecedentsService {
         .split(/\s+/)
         .filter((word) => !/^(?:state|union|india|govt\.?|government|the|of|and|ors\.?|anr\.?|&)$/i.test(word));
 
+      // What the model named, before any of it is looked for - so a miss can
+      // be told apart: nothing named, not on Kanoon, or not said in its text.
+      this.logger.info(
+        { named: named.case_title, candidates: candidates.map((c) => `${c.name} (${c.year})`), raw: result.text.slice(0, 300) },
+        'Overruling judgment candidates',
+      );
       for (const candidate of candidates) {
         const later = await this.confirmLeadingJudgment(candidate, supreme ? 'supremecourt' : null);
         const tid = later ? kanoonTid(later.judgment_id) : null;
-        if (!later || tid === null || later.judgment_id === named.judgment_id) continue;
+        if (!later || tid === null || later.judgment_id === named.judgment_id) {
+          this.logger.info({ named: named.case_title, candidate: `${candidate.name} (${candidate.year})` }, 'Overruling judgment not found on Kanoon');
+          continue;
+        }
         const html = await this.kanoon.lawDocument(tid, this.env.KANOON_TIMEOUT_MS).catch(() => '');
         const says = textOverrules(html, petitioner);
         this.logger.info({ named: named.case_title, candidate: `${candidate.name} (${candidate.year})`, found: later.case_title, says }, 'Overruling judgment');
