@@ -114,9 +114,23 @@ export function extractSectionReference(text: string): { section: string | null;
   // whitespace before it makes "section 302 IPC" parse as section "302I",
   // swallowing the first letter of the act name - which then fails every
   // lookup, silently.
-  const explicit = /\b(?:u\/s|under\s+section|section|sec|s)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/i.exec(text);
+  const explicit = /\b(?:u\/s|under\s+section|section|sec|s|dhara|dhaara)\.?\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/i.exec(text);
   if (explicit?.[1]) {
     return { section: explicit[1].replace(/\s+/g, '').toUpperCase(), act };
+  }
+
+  /*
+   * "धारा 174" - the Hindi word for section. No \b: JavaScript's word boundary
+   * does not see Devanagari letters.
+   *
+   * Without this "BNSS की धारा 174 पुराने CrPC की कौन सी धारा थी?" carried no
+   * section at all, the router guessed, and the reply was written from memory:
+   * "BNSS 174 was CrPC 154" - it was CrPC 155 (live tests of 4 and 7 October:
+   * M-CRPC-010, M-CRPC-031, M-IEA-024, M-REV-011).
+   */
+  const hindi = /(?:धारा|दफ़ा|दफा)\s*(\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?)/i.exec(text);
+  if (hindi?.[1]) {
+    return { section: hindi[1].replace(/\s+/g, '').toUpperCase(), act };
   }
 
   // "302 IPC" - number immediately before the act name.
@@ -156,6 +170,8 @@ const RECODIFICATION_PAIRS: [ActCode, ActCode][] = [['IPC', 'BNS'], ['CRPC', 'BN
 const PAIR_CODE_NAMES =
   'ipc|bns|crpc|cr\\.?p\\.?c|bnss|iea|bsa|indian penal code|bharatiya nyaya sanhita|code of criminal procedure|criminal procedure code|bharatiya nagarik suraksha sanhita|indian evidence act|evidence act|bharatiya sakshya adhiniyam';
 const SECTION_NUMBER = /\d+[A-Z]?(?:\s*\(\s*\d+\s*\))?/;
+/** What may stand between a code and its number: "IPC 302", "IPC section 302", "CrPC की धारा 133", "IPC ki dhara 302". */
+const CODE_TO_NUMBER = /^\s*(?:(?:की|का|के|ki|ka|ke)\s+)?(?:section|sec|s|dhara|dhaara|धारा)?\.?\s*$/i;
 
 /**
  * The provision a question about the recodification is actually about.
@@ -185,7 +201,9 @@ export function recodifiedReference(text: string): { act: ActCode; section: stri
     // Each side checks the code is on that side: a slice whose end comes before
     // its start is "", which reads as no gap at all - and "2023 mein 420 IPC"
     // gave the IPC section 2023, from any code named later in the question.
-    const before = codes.find((c) => c.end <= start && /^\s*(?:section|sec|s)?\.?\s*$/i.test(text.slice(c.end, start)));
+    // "CrPC की धारा 133", "IPC ki dhara 302": the Hindi possessive and the Hindi
+    // word for section sit between the code and its number.
+    const before = codes.find((c) => c.end <= start && CODE_TO_NUMBER.test(text.slice(c.end, start)));
     const after = codes.find((c) => c.start >= end && /^\s+(?:of\s+(?:the\s+)?)?$/i.test(text.slice(end, c.start)));
     const owner = before ?? after;
     if (owner && !numbered.has(owner.act)) {
@@ -315,6 +333,16 @@ const CITATION_PATTERNS: RegExp[] = [
   /\b(\d{4}\s*\(\d+\)\s*[A-Z][A-Za-z]*\s*\d+)\b/g,
   // (2020) 7 SCC 1 style with reporter variants
   /(\(\d{4}\)\s*\d+\s*[A-Z]{2,6}\s*\d+)/g,
+  /*
+   * 1992 Supp (1) SCC 335 - the SCC's supplementary volumes, and Kanoon's way
+   * of printing them, 1992 SCC (SUPP) 1 335.
+   *
+   * None of the patterns above reads "Supp", so "1992 Supp (1) SCC 335 - which
+   * judgment?" was not a citation at all: it went to a topic search and came
+   * back as "10 authorities on 1992 Supp (1) SCC 335", Indra Sawhney first, for
+   * two credits - Bhajan Lal was not in the list (live test, 7 Oct, J-CL-10).
+   */
+  /(\(?\d{4}\)?\s+Supp\.?\s*\(?\s*\d+\s*\)?\s*SCC\s+\d+|\d{4}\s+SCC\s*\(\s*Supp\.?\s*\)\s*\d+\s+\d+)/gi,
 ];
 
 /** Extract case citations from model output, deduplicated and trimmed. */
@@ -536,6 +564,24 @@ const STATUTORY_WORDING: ReadonlyArray<[RegExp, string]> = [
   // a question about theft and bail (live test, 4 Oct, X34). The FIR section
   // itself is among the facts every answer is given (prompts.ts).
   [/\bfir\b|\bf\.i\.r\b\.?|एफआईआर/gi, ' '],
+  /*
+   * BNS 106(2): "causes death of any person by rash and negligent driving of
+   * vehicle ... and escapes without reporting it to a police officer or a
+   * Magistrate". The Act never says "hit and run", and "Hit and run ke liye naya
+   * section kaunsa hai BNS mein?" was answered "Corpus mein hit and run ke liye
+   * koi specific section nahi mil raha" for two credits (live test, 7 Oct, O-04).
+   */
+  [/\bhit[\s-]*(?:and|&|n)[\s-]*run\b/gi, ' negligent driving escapes reporting '],
+  /*
+   * BSA 26(a): "When the statement is made by a person as to the cause of his
+   * death, or as to any of the circumstances of the transaction which resulted
+   * in his death". "Which BSA section deals with dying declarations?" found BNS
+   * 236 and 237 (false declarations) and was answered "The corpus doesn't cover
+   * that BSA section" for two credits (live test, 7 Oct, N-12).
+   */
+  [/\bdying\s+declarations?\b|मृत्यु(?:कालीन|\s*पूर्व)\s*(?:कथन|बयान)/gi, ' statement cause death circumstances transaction '],
+  // "saza" / "सजा" is how the question asks for the punishment; the Acts say punished.
+  [/\bsaza+\b|\bsazaa\b|सज़ा|सजा/gi, ' punishment '],
   [/जमानत|\b(?:zamanat|jamanat)\b/gi, ' bail '],
   [/हत्या|\bhatya\b/gi, ' murder '],
   [/चोरी|\bchori\b/gi, ' theft '],
@@ -565,7 +611,30 @@ const NOT_THE_SUBJECT = new Set([
   'say', 'says', 'mean', 'means', 'happen', 'happens', 'get', 'gets', 'give', 'gives', 'registered', 'client', 'clients',
   'my', 'mera', 'meri', 'mere', 'aur', 'kis', 'ya', 'tha', 'thi', 'hua', 'hui', 'karna', 'chahiye', 'kaise', 'milti',
   'milta', 'milegi', 'sakta', 'sakti', 'par', 'se', 'ko', 'bhi', 'ab', 'naamit', 'lagega', 'law',
+  // "naya section" is the new code, not the subject: left in, every word of
+  // "negligent driving escapes reporting naya" had to match and nothing did.
+  'naya', 'nayi', 'naye', 'purana', 'purani', 'purane', 'kitni', 'kitna', 'kitne', 'hui', 'hua',
 ]);
+
+/**
+ * Hinglish: Hindi written in Latin script - "IPC 309 attempt to suicide ka BNS
+ * mein kya hua?". The router reports its language as "en", and the reply came
+ * back in English (live tests of 4 and 7 October, M-IPC-026, O-02). Two
+ * different Hindi function words, in a message with no Devanagari, or the word
+ * "Hinglish" itself.
+ */
+const HINGLISH_WORDS = new Set([
+  'hai', 'hain', 'kya', 'ka', 'ki', 'ke', 'mein', 'kaun', 'kaunsa', 'kaunsi', 'konsa', 'konsi', 'kitni', 'kitna',
+  'tha', 'thi', 'naya', 'nayi', 'purana', 'purani', 'ko', 'liye', 'hota', 'hoti', 'batao', 'bataiye', 'saza',
+  'aur', 'nahi', 'kaise', 'karo', 'karna', 'chahiye', 'milti', 'milta', 'kab', 'kahan', 'gaya', 'hoga',
+]);
+
+export function isHinglish(text: string): boolean {
+  if (/[ऀ-ॿ]/.test(text)) return false;
+  if (/\bhinglish\b/i.test(text)) return true;
+  const words = new Set(text.toLowerCase().split(/[^a-z]+/).filter((w) => HINGLISH_WORDS.has(w)));
+  return words.size >= 2;
+}
 
 /**
  * The words a provision on this subject would contain, for the full-text

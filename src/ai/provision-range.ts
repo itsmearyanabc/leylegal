@@ -53,6 +53,20 @@ const OLD_CODE: Partial<Record<ActCode, ActCode>> = { BNS: 'IPC', BNSS: 'CRPC', 
 const SECTION_ACTS: ActCode[] = ['BNS', 'BNSS', 'BSA', 'IPC', 'CRPC', 'IEA', 'CPC'];
 
 /**
+ * Sections inside an Act's range that were repealed long before the Act itself,
+ * so "Section N does exist in the IPC" would be false for them.
+ *
+ * "What is Section 490 of the CrPC?" was answered "Section 490 does exist in
+ * the BNSS, IPC" (live test, 4 Oct, T-16). IPC 490 and 492 were repealed by the
+ * Workmen's Breach of Contract (Repealing) Act, 1925; IPC 161 to 165A by the
+ * Prevention of Corruption Act, 1988 (section 31). Only repeals that are
+ * certain are listed - this list only ever removes a claim, never adds one.
+ */
+const REPEALED: Partial<Record<ActCode, ReadonlySet<number>>> = {
+  IPC: new Set([161, 162, 163, 164, 165, 490, 492]),
+};
+
+/**
  * A ready answer when the provision cannot exist, else null.
  *
  * `provision` is the classifier's section_number: "520", "498A", "Order 52",
@@ -74,12 +88,20 @@ export function nonexistentProvision(act: ActCode | null, provision: string | nu
     return `*Order ${n} of the Civil Procedure Code (CPC)* does not exist. The First Schedule of the CPC runs from Order I to Order LI (51), so there is no Order ${n}.\n\nCheck the number - Order and Rule numbers are easy to transpose.`;
   }
 
-  const article = /^article\s+(\d+)/i.exec(text);
-  const section = /^(?:section\s+)?(\d+)/i.exec(text);
+  const article = /^article\s+(\d+)([A-Z]{0,3})/i.exec(text);
+  const section = /^(?:section\s+)?(\d+)([A-Z]{0,3})/i.exec(text);
   const match = range.unit === 'Article' ? article ?? section : section;
   if (!match || (range.unit !== 'Article' && article)) return null;
 
   const n = Number(match[1]);
+  /*
+   * The number as typed, letter and all. "FIR is under BNS 498A" was answered
+   * "Section 498 of the BNS does not exist" (live test, 7 Oct, T-08) - the
+   * advocate never asked about 498, and 498 is a different IPC section
+   * (enticing a married woman) from the 498A they meant.
+   */
+  const label = `${n}${(match[2] ?? '').toUpperCase()}`;
+  const lettered = label !== String(n);
 
   /*
    * A lettered number in a 2023 code.
@@ -90,14 +112,14 @@ export function nonexistentProvision(act: ActCode | null, provision: string | nu
    * there has a letter. "Patna High Court judgments on dowry death conviction
    * under Section 304B" was searched on Kanoon as Section 304B of the BNS and
    * found one stray writ petition (live test, 6 Oct, X30). It is the IPC's.
+   * The last line is replaced by the official mapping where there is one
+   * (rag.service.ts, oldCodeMapping): IPC 304B is BNS 80.
    */
-  const lettered = /^(?:section\s+)?\d+\s*-?\s*([a-z]{1,2})\b/i.exec(text);
   const oldCode = OLD_CODE[act];
   if (range.unit === 'Section' && lettered && oldCode && n >= 1 && n <= range.last) {
-    const number = `${n}${lettered[1].toUpperCase()}`;
     return [
-      `*Section ${number} of the ${FULL_NAMES[act] ?? act}* does not exist. The ${SHORT_NAMES[act]} numbers its sections 1 to ${range.last}, with no lettered sections - numbers like ${number} come from the ${SHORT_NAMES[oldCode]}.`,
-      `If you mean the ${SHORT_NAMES[oldCode]} section, ask for *Section ${number} ${SHORT_NAMES[oldCode]}* and its ${SHORT_NAMES[act]} equivalent.`,
+      `*Section ${label} of the ${FULL_NAMES[act] ?? act}* does not exist. The ${SHORT_NAMES[act]} numbers its sections 1 to ${range.last}, with no lettered sections - numbers like ${label} come from the ${SHORT_NAMES[oldCode]}.`,
+      OLD_NUMBER_HINT,
     ].join('\n\n');
   }
 
@@ -105,11 +127,17 @@ export function nonexistentProvision(act: ActCode | null, provision: string | nu
 
   const name = FULL_NAMES[act] ?? act;
   const lines = [
-    `*${range.unit} ${n} of the ${name}* does not exist. The ${SHORT_NAMES[act] ?? name} has ${range.last} ${range.unit.toLowerCase()}s, so its numbering ends at ${range.unit} ${range.last}.`,
+    `*${range.unit} ${label} of the ${name}* does not exist. The ${SHORT_NAMES[act] ?? name} has ${range.last} ${range.unit.toLowerCase()}s, so its numbering ends at ${range.unit} ${range.last}.`,
   ];
 
-  if (range.unit === 'Section' && n >= 1) {
-    const elsewhere = SECTION_ACTS.filter((other) => other !== act && n <= (LAST_PROVISION[other]?.last ?? 0));
+  // Where else the number exists is known from the ranges only for a plain
+  // number: whether 498A exists in the BNSS cannot be read off "531 sections"
+  // (it does not). A lettered number gets the official mapping instead, added
+  // by the caller from the correspondence table (rag.service.ts).
+  if (range.unit === 'Section' && n >= 1 && !lettered) {
+    const elsewhere = SECTION_ACTS.filter(
+      (other) => other !== act && n <= (LAST_PROVISION[other]?.last ?? 0) && !REPEALED[other]?.has(n),
+    );
     if (elsewhere.length) {
       lines.push(
         `Section ${n} does exist in the ${elsewhere.map((other) => SHORT_NAMES[other]).join(', ')} - if you meant one of those, ask about it by name, for example *Section ${n} ${SHORT_NAMES[elsewhere[0]]}*.`,
@@ -117,6 +145,9 @@ export function nonexistentProvision(act: ActCode | null, provision: string | nu
     }
   }
 
-  lines.push('If you are working from an old IPC or CrPC number, ask for that section and its BNS or BNSS equivalent.');
+  lines.push(OLD_NUMBER_HINT);
   return lines.join('\n\n');
 }
+
+/** The last line of every "does not exist" reply - replaced by the mapping itself when there is one (rag.service.ts). */
+export const OLD_NUMBER_HINT = 'If you are working from an old IPC or CrPC number, ask for that section and its BNS or BNSS equivalent.';

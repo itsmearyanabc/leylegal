@@ -86,6 +86,23 @@ const CRIMINAL_CODES = `THE CRIMINAL CODES - facts, not to be second-guessed:
 - Which code applies: an offence committed before 1 July 2024 is governed by the IPC, one on or after by the BNS. An appeal, application, trial, inquiry or investigation pending on 1 July 2024 continues under the CrPC (BNSS 531); proceedings begun on or after that date are under the BNSS. When a question gives dates, say which code governs.`;
 
 /**
+ * The sections CRIMINAL_CODES states, as references - given to every answer,
+ * so the check on what an answer cites counts them as given
+ * (guardrails.service.ts, groundedRefs). Listed by hand because the bail
+ * sections are written "BNSS: 478 ..., 480 ...", a form no reference pattern
+ * reads; the test in guardrails-grounding.spec.ts keeps this list and the text
+ * in step.
+ */
+export const PROMPT_GIVEN_REFS: readonly string[] = [
+  'BNSS 478', 'BNSS 480', 'BNSS 482', 'BNSS 483', 'CRPC 436', 'CRPC 437', 'CRPC 438', 'CRPC 439',
+  'BNSS 173', 'CRPC 154', 'BNSS 35', 'CRPC 41', 'CRPC 41A', 'BNS 111', 'BNS 103', 'BNS 117',
+  'BSA 23', 'IEA 25', 'IEA 26', 'IEA 27', 'BNSS 531',
+];
+
+/** For the test that keeps PROMPT_GIVEN_REFS in step with the text. */
+export const CRIMINAL_CODES_TEXT = CRIMINAL_CODES;
+
+/**
  * Who the bot is.
  *
  * Without this the model defaults to a customer-service register - hedging,
@@ -167,14 +184,22 @@ Explain the provision the advocate asked about, in AT MOST 200 words, using exac
 
 *SECTION:* the act and section number, and its title.
 *SUMMARY:* what the provision does, in plain language.
-*KEY ELEMENTS:* the ingredients that must be proved, as short bullets. Include whether the offence is cognizable, bailable and compoundable where the material states it, and the punishment where it is given.
+*KEY ELEMENTS:* the ingredients that must be proved, as short bullets, and the punishment where it is given. Say whether the offence is cognizable, bailable or compoundable ONLY where a "Classification:" line above states it; otherwise say nothing about it.
 *PRACTICAL USE:* when an advocate actually reaches for this section.
 
 If the provision has a corresponding section in the BNS or BNSS, state the mapping inside SUMMARY - it is the most common follow-up since the 2023 recodification.
+
+Rules for the mapping and the text - the live tests of October 2026 failed on each of these:
+- SUB-SECTIONS. The correspondence table often names a whole section where the answer is one sub-section. When the corresponding section has numbered sub-sections and the table names none, name the sub-section whose words match the old provision - for an old "Punishment for ..." section, the sub-section that sets the punishment - and say the official table gives only the section.
+- NEW SUB-SECTIONS. A sub-section the old code never had (the table lists no old section for it) has no IPC, CrPC or Evidence Act equivalent. Say so; do not attach the whole section's old counterparts to it.
+- PROVISOS. A proviso is part of the sub-section it follows. When the table names a proviso, say "the proviso to" that sub-section. When a requirement applies only under a proviso, say when it applies - never state it as the general rule.
+- NUMBERS. Never say the number is the same in both codes unless the two numbers are identical.
+- A POINTED QUESTION - who signs, within how many days, what punishment - is answered first, in the exact words of the sub-section that decides it, with that sub-section's number. Leave none of the people or conditions it lists out.
+- A provision marked "RELATED, NOT A COUNTERPART" may be mentioned only as related, saying how it differs; never call it the equivalent.
 ${
   asked
     ? `The advocate asked about *${asked}*. Answer about that provision. The material above may be filed under the other code - the corpus records the 2023 recodification as a mapping on the older section - so if what you were given is the corresponding section rather than the one they named, open SECTION with the provision they asked about, give the mapping in the same line, and explain the provision on that footing. Do not silently answer about the other code.`
-    : `The advocate described a subject rather than naming a section. The provisions above were found by searching the codes for it. Under SECTION, name the one that answers the question. If the question named a code and the answer is in a different one - bail is in the BNSS, not the BNS - say so in the same line. Name any other provision above that also bears on the question in one line under PRACTICAL USE. If none of the provisions above answers the question, say that in one sentence instead of explaining one of them.`
+    : `The advocate described a subject rather than naming a section. The provisions above were found by searching the codes for it. Under SECTION, name the one that answers the question. If the question named a code and the answer is in a different one - bail is in the BNSS, not the BNS - say so in the same line. Name any other provision above that also bears on the question in one line under PRACTICAL USE. If none of the provisions above answers the question, reply with exactly NOT_COVERED and nothing else - no headings, no explanation.`
 }
 
 Do not add a closing caveat or a sign-off; both are appended after you.`;
@@ -341,6 +366,10 @@ Reply with JSON only, no code fence:
 
 function languageInstruction(language: string): string {
   if (language === 'en') return 'Reply in English.';
+  // Hindi written in Latin script, as advocates type it (legal-patterns.ts, isHinglish).
+  if (language === 'hinglish') {
+    return 'Reply in Hinglish - Hindi written in Latin script, the way the question was written. Keep case names, citations, section numbers and act names in English exactly as given - they are cited in English in court.';
+  }
 
   const names: Record<string, string> = {
     hi: 'Hindi',
@@ -406,7 +435,7 @@ function noCounterpartLine(s: StatuteRow): string | null {
   const replacedBy: Record<string, string> = { IPC: 'BNS', CRPC: 'BNSS', IEA: 'BSA' };
   const replaced: Record<string, string> = { BNS: 'IPC', BNSS: 'CrPC', BSA: 'Evidence Act' };
   if (replacedBy[act]) {
-    return `  Corresponds to: no ${replacedBy[act]} section - the official 2023 correspondence table lists none (not carried into the ${replacedBy[act]}). Do not name one.`;
+    return `  Corresponds to: no ${replacedBy[act]} section - the official 2023 correspondence table lists none (not carried into the ${replacedBy[act]}). Do not call any section its counterpart.`;
   }
   if (replaced[act]) {
     return `  Corresponds to: no ${replaced[act]} section - the official 2023 correspondence table lists none (a new provision). Do not name one.`;
@@ -427,6 +456,10 @@ function formatStatutes(statutes: StatuteRow[]): string {
 
       return [
         `${statuteLabel(s)} - ${s.section_title}`,
+        // Found by subject for an old section the table maps to nothing (rag.service.ts, relatedProvisions).
+        s.related_to
+          ? `  RELATED, NOT A COUNTERPART: the official 2023 correspondence table does not map ${s.related_to} to this section. Mention it only as a related provision, saying how it differs.`
+          : null,
         // 0006's seed rows are summaries; they have no source. The model must
         // not quote one as the section's words.
         s.source_url === null ? '  (Abridged summary, not the enacted wording - do not quote it as the text of the section.)' : null,

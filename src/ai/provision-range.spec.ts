@@ -1,4 +1,4 @@
-import { nonexistentProvision } from './provision-range';
+import { nonexistentProvision, OLD_NUMBER_HINT } from './provision-range';
 
 /**
  * "BNS Section 520 kya hai?" was answered "I am not sure what Section 520
@@ -65,7 +65,8 @@ describe('a lettered section in a 2023 code', () => {
     const answer = nonexistentProvision('BNS', '304B');
     expect(answer).toContain('*Section 304B of the Bharatiya Nyaya Sanhita (BNS)* does not exist');
     expect(answer).toContain('no lettered sections - numbers like 304B come from the IPC');
-    expect(answer).toContain('*Section 304B IPC*');
+    // Ends with the hint the official mapping replaces (rag.service.ts): IPC 304B is BNS 80.
+    expect(answer).toContain(OLD_NUMBER_HINT);
     expect(nonexistentProvision('BNSS', '41A')).toContain('come from the CrPC');
     expect(nonexistentProvision('BSA', '65B')).toContain('come from the Evidence Act');
   });

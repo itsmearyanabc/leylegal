@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
-import { IntentService } from '../ai/intent.service';
-import { extractCnr, isValidCnr } from '../ai/legal-patterns';
+import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService } from '../ai/intent.service';
+import { extractCnr } from '../ai/legal-patterns';
 import { costLine, WebFallbackService } from '../ai/web-fallback';
 import { looksLikeCnrAttempt, looksLikeEnrolmentAttempt } from './onboarding';
 import { ChatMemoryService } from '../ai/memory/chat-memory.service';
@@ -1036,6 +1036,13 @@ export class ConversationService {
       await this.users.setLanguage(user.id, intent.language);
     }
 
+    // An assignment to be written is declined, free, before anything is
+    // charged - as on the website (intent.service.ts, asksToWriteAssignment).
+    if (asksToWriteAssignment(text)) {
+      await this.api.sendText(job.from, `${ASSIGNMENT_REPLY}\n\n${costLine(0, false)}`);
+      return {};
+    }
+
     switch (intent.intent) {
       case 'SMALL_TALK': {
         // Deliberately not quota-checked: greeting the bot must never consume
@@ -1156,16 +1163,10 @@ export class ConversationService {
        * - a repeat lookup, an unlimited role - matches no rows and does
        * nothing.
        */
-      // eCourts has no record of a well-formed CNR: what the web has, apart and
-      // marked unverified, for one credit (web-fallback.ts) - as on the website.
-      if (err instanceof CnrNotFoundError && isValidCnr(cnr)) {
-        const unverified = await this.web.find('cnr', originalQuery, cnr);
-        if (unverified) {
-          const cost = (await this.credits.chargeUnverified(user.id, user.role, spendReference(job.waMessageId))) ?? CREDIT_COST.CASE_STATUS;
-          await this.api.sendText(user.phone_number, Replies.unverifiedReply(`eCourts has no record of CNR ${cnr}.`, cost, unverified));
-          return;
-        }
-      }
+      // eCourts has no record of the CNR: no web search. eCourts is the record
+      // of every case a CNR names, and a search for one it lacks invented a
+      // registration - "is registered in the eCourts system" - for a made-up
+      // number, and charged for it (live test, 7 Oct, C-06; web-fallback.ts).
 
       await this.credits
         .refund(user.id, user.role, spendReference(job.waMessageId), 'Case status lookup failed')
@@ -1247,7 +1248,11 @@ export class ConversationService {
         .catch((err) => this.logger.warn({ err }, 'Could not refund an empty precedent search'));
     }
 
+    // A wrong citation beside a case name, an absolute rule the question
+    // assumes: said above the list, as on the website (precedents.service.ts).
+    const notes = result.notes?.length ? `${result.notes.map((note) => `_${note}_`).join('\n\n')}\n\n` : '';
     const judgments = () =>
+      notes +
       formatPrecedentPage(result.precedents, 0, pageSize, intent.searchQuery, {
         lexicalOnly: result.lexicalOnly,
         source: result.source,
@@ -1414,19 +1419,26 @@ export class ConversationService {
     // No official text for the provision asked about. What the web has, apart
     // and marked unverified, for one credit (web-fallback.ts); if nothing, the
     // reply says so and the charge taken in answerSearch() goes back.
-    const unverified = answer.unavailable ? await this.web.find('provision', originalText, answer.provision ?? null) : null;
+    const unverified = answer.unavailable && !answer.free ? await this.web.find('provision', originalText, answer.provision ?? null) : null;
     let unverifiedCost = 0;
     if (unverified) {
       unverifiedCost = (await this.credits.chargeUnverified(user.id, user.role, spendReference(job.waMessageId))) ?? CREDIT_COST.SECTION_LOOKUP;
-    } else if (answer.unavailable) {
-      await this.credits.refund(user.id, user.role, spendReference(job.waMessageId), 'No official text for that provision');
+    } else if (answer.unavailable || answer.free) {
+      // A fixed reply that delivers no research - a question back, "none of
+      // the sections answers this" - costs nothing, as on the website.
+      await this.credits.refund(
+        user.id,
+        user.role,
+        spendReference(job.waMessageId),
+        answer.free ? 'No research delivered' : 'No official text for that provision',
+      );
     }
 
     let text = answer.text.trim();
     if (!text) {
       text = 'I could not produce an answer for that. Try rephrasing, or type *menu* for other options.';
     }
-    if (answer.unavailable) {
+    if (answer.unavailable || answer.free) {
       text += `\n\n${costLine(unverifiedCost, unverified !== null)}`;
     }
     if (unverified) {

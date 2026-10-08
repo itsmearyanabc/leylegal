@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { IntentService } from '../ai/intent.service';
-import { extractCnr, isValidCnr } from '../ai/legal-patterns';
-import { costLine, impossibleCitation, UnverifiedInfo, WebFallbackService } from '../ai/web-fallback';
+import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService } from '../ai/intent.service';
+import { extractCnr } from '../ai/legal-patterns';
+import { costLine, impossibleCitation, impossibleCitationHindi, UnverifiedInfo, WebFallbackService } from '../ai/web-fallback';
 import {
   NOT_AVAILABLE,
   PrecedentsService,
@@ -11,7 +11,7 @@ import {
   stripEllipsis,
 } from '../ai/precedents.service';
 import { ProviderRegistry } from '../ai/providers/provider.registry';
-import { RagDraft, RagService, RagStage } from '../ai/rag.service';
+import { RagDraft, RagService, RagStage, statutesShown } from '../ai/rag.service';
 import { CircuitOpenError } from '../common/circuit-breaker';
 import { getLogger } from '../common/logger';
 import { CREDIT_COST, CreditBalance, CreditsService } from '../credits/credits.service';
@@ -253,6 +253,21 @@ export class ChatService {
       return;
     }
 
+    // An assignment to be written is declined before anything is charged: the
+    // reply is fixed, and it delivers no research (intent.service.ts).
+    if (asksToWriteAssignment(question)) {
+      const message = await this.chats.appendMessage({
+        threadId,
+        userId: user.id,
+        role: 'assistant',
+        content: `${ASSIGNMENT_REPLY} ${costLine(0, false)}`,
+        intent: 'UNSUPPORTED',
+        creditsCharged: 0,
+      });
+      yield { type: 'answer', message: toPublic(message), credits: await this.credits.peek(user.id, user.role), charged: 0 };
+      return;
+    }
+
     // Stopped while the question was being read: nothing has been charged yet,
     // and nothing will be. Checked here because this is the last moment that
     // costs nothing - past it the charge is taken and the model is called.
@@ -452,27 +467,10 @@ export class ChatService {
         charged: decision.charged,
       };
     } catch (err) {
-      // eCourts has no record of a well-formed CNR: what the web has, apart and
-      // marked unverified, for the credit already taken (web-fallback.ts).
-      if (err instanceof CnrNotFoundError && isValidCnr(cnr)) {
-        yield { type: 'stage', stage: 'searching-web' };
-        const unverified = await this.web.find('cnr', question, cnr);
-        if (unverified) {
-          const charged = (await this.credits.chargeUnverified(user.id, user.role, reference)) ?? decision.charged;
-          const message = await this.chats.appendMessage({
-            threadId,
-            userId: user.id,
-            role: 'assistant',
-            content: `eCourts has no record of CNR ${cnr}.\n\n${costLine(charged, true)}`,
-            intent: 'CASE_STATUS',
-            structured: { kind: 'notice', unverified },
-            latencyMs: Date.now() - started,
-            creditsCharged: charged,
-          });
-          yield { type: 'answer', message: toPublic(message), credits: await this.credits.peek(user.id, user.role), charged };
-          return;
-        }
-      }
+      // eCourts has no record of the CNR: no web search. eCourts is the record
+      // of every case a CNR names, and a search for one it lacks invented a
+      // registration - "is registered in the eCourts system" - for a made-up
+      // number, and charged for it (live test, 7 Oct, C-06; web-fallback.ts).
 
       const reason =
         err instanceof CnrNotFoundError
@@ -568,8 +566,12 @@ export class ChatService {
     // is said to be impossible, free, and never searched for on the web, which
     // "found" another case for it (web-fallback.ts, impossibleCitation).
     let impossible: string | null = null;
+    // A question asked in Devanagari is told "not found" in Hindi: "(2022) 40
+    // SCC 404" asked in Hindi got its refusal in English (live test, 7 Oct,
+    // J-FK-13). Case names and citations stay as written.
+    const hindi = /[ऀ-ॿ]/.test(question);
     if (rows.length === 0 && !cases) {
-      impossible = impossibleCitation(question);
+      impossible = hindi ? impossibleCitationHindi(question) : impossibleCitation(question);
       // Nothing from Kanoon or eCourts: what the web has, apart and marked
       // unverified, for one credit (web-fallback.ts) - or the refund.
       if (!impossible) {
@@ -605,16 +607,28 @@ export class ChatService {
     // name - not as a topic search for the router's rewrite of the question,
     // which read as if other judgments might still answer it (precedents.service.ts).
     const missing = searched.namedCase && !searched.namedCase.found
-      ? `No judgment found for "${searched.namedCase.name}" in Ley Legal's sources. ` +
-        'Check the party names or the citation, or describe the point of law instead.'
+      ? hindi
+        ? `Ley Legal के स्रोतों में "${searched.namedCase.name}" का कोई फ़ैसला नहीं मिला। ` +
+          'पक्षकारों के नाम या उद्धरण (citation) जाँचें, या क़ानूनी प्रश्न अपने शब्दों में लिखें।'
+        : `No judgment found for "${searched.namedCase.name}" in Ley Legal's sources. ` +
+          'Check the party names or the citation, or describe the point of law instead.'
       : null;
+    const notCharged = hindi ? 'आपसे कोई क्रेडिट नहीं लिया गया।' : 'You have not been charged.';
+    const cannotExist = impossible
+      ? hindi
+        ? ` यह उद्धरण (citation) मौजूद नहीं हो सकता: ${impossible}।`
+        : ` That citation cannot exist: ${impossible}.`
+      : '';
+    // A wrong citation beside a case name, an absolute rule the question
+    // assumes: said above the list (precedents.service.ts).
+    const notes = searched.notes?.length ? `${searched.notes.join('\n\n')}\n\n` : '';
 
     const message = await this.chats.appendMessage({
       threadId,
       userId: user.id,
       role: 'assistant',
       content: rows.length
-        ? `${rows.length} ${rows.length === 1 ? 'authority' : 'authorities'} on "${intent.searchQuery}"`
+        ? `${notes}${rows.length} ${rows.length === 1 ? 'authority' : 'authorities'} on "${intent.searchQuery}"`
         : cases
           ? `No reported judgment found for "${cases.query}". ` +
             `${cases.result.totalHits === 1 ? 'One case' : `${cases.result.totalHits} cases`} on eCourts with these parties.`
@@ -623,8 +637,7 @@ export class ChatService {
         : emptyReason === 'no-corpus'
           ? 'No judgment database is available on this deployment yet, so there is nothing to search. ' +
             'You have not been charged.'
-          : `${missing ?? `No judgments matched "${intent.searchQuery}".`}` +
-            `${impossible ? ` That citation cannot exist: ${impossible}.` : ''} You have not been charged.`,
+          : `${missing ?? `No judgments matched "${intent.searchQuery}".`}${cannotExist} ${notCharged}`,
       intent: 'PRECEDENT_SEARCH',
       // Every citation here came straight out of the corpus, so they are
       // verified by construction - there is nothing for the guardrail to strip
@@ -650,6 +663,7 @@ export class ChatService {
             }
           : null,
         unverified,
+        notes: searched.notes ?? [],
       },
       latencyMs: searched.latencyMs,
       creditsCharged: charged,
@@ -731,7 +745,13 @@ export class ChatService {
     // nothing either, an answer was not delivered - refunded, as a search that
     // found nothing is.
     let unverified: UnverifiedInfo | null = null;
-    if (answer.unavailable) {
+    // A fixed reply that delivers no research - a question back, "none of the
+    // sections answers this" - costs nothing and is not searched on the web.
+    if (answer.free) {
+      if (charged > 0) await this.credits.refund(user.id, user.role, reference, 'No research delivered');
+      charged = 0;
+      text = `${text}\n\n${/[ऀ-ॿ]/.test(question) ? 'आपसे कोई क्रेडिट नहीं लिया गया।' : costLine(0, false)}`;
+    } else if (answer.unavailable) {
       yield { type: 'stage', stage: 'searching-web' };
       unverified = await this.web.find('provision', question, answer.provision ?? null);
       if (unverified) {
@@ -758,7 +778,8 @@ export class ChatService {
         // provider is a placeholder, and an advocate who mistakes one for legal
         // research is the worst outcome this system has.
         mocked,
-        statutes: answer.statutes.map((s) => ({
+        // Only the provisions the answer names (rag.service.ts, statutesShown).
+        statutes: statutesShown(text, answer.statutes).map((s) => ({
           actCode: s.act_code,
           actName: s.act_name,
           sectionNumber: s.section_number,

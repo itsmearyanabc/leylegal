@@ -11,8 +11,9 @@ import { SettingsService } from '../settings/settings.service';
 // WhatsApp message, so sharing the closing copy is the honest dependency.
 import { CAVEAT, RETURN_TO_MENU } from '../whatsapp/replies';
 import { EmbeddingService } from './embedding.service';
-import { ClassifiedIntent } from './intent.service';
+import { asksWhichCase, ClassifiedIntent } from './intent.service';
 import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName, looseTitle, samePetitioner } from './case-name';
+import { ABSOLUTE_RULE_NOTE, assumesAbsoluteRule, kanoonCitationForms, sameCitation } from './citation-match';
 import {
   buildLeadingJudgmentsPrompt,
   LeadingJudgment,
@@ -100,19 +101,23 @@ function forCitation(
   const citation = extractCitations(typed)[0];
   if (!citation) return { precedents: rows };
 
-  const wanted = normaliseCitation(citation);
-  const matches = rows.filter((row) =>
-    [row.neutral_citation, ...(row.reporter_citations ?? [])].some((c) => !!c && normaliseCitation(c) === wanted),
-  );
+  const matches = rows.filter((row) => carriesCitation(row, citation));
   return matches.length > 0
     ? { precedents: matches, namedCase: { name: citation, found: true } }
     : { precedents: [], namedCase: { name: citation, found: false } };
 }
 
-/** "(2020) 7 SCC 1" and "2020 7 SCC 1" alike: lowercase, no punctuation or spaces. */
-function normaliseCitation(citation: string): string {
-  return citation.toLowerCase().replace(/[^a-z0-9]/g, '');
+/**
+ * Whether Kanoon or the corpus prints this citation on the judgment - any
+ * spelling of it: "(2014) 2 SCC 1" is "2014 (2) SCC 1", "AIR 1962 SC 605" is
+ * "AIR 1962 SUPREME COURT 605" (citation-match.ts).
+ */
+function carriesCitation(row: PrecedentRow, citation: string): boolean {
+  return [row.neutral_citation, ...(row.reporter_citations ?? [])].some((c) => !!c && sameCitation(c, citation));
 }
+
+/** How many of a `cite:` search's results have their citations read before it is judged not found. */
+const CITATION_PROBE = 3;
 
 function display(name: CaseName): string {
   return `${name.petitioner} vs ${name.respondent}`;
@@ -132,6 +137,36 @@ function isTopicQuestion(intent: ClassifiedIntent): boolean {
 /** The Supreme Court above every other court. */
 function courtWeight(row: PrecedentRow): number {
   return /^supreme court\b/i.test(row.court_name ?? '') ? 1 : 0;
+}
+
+/**
+ * Said when the citation typed beside a case name is not that case's.
+ *
+ * Read off Kanoon's records only: which judgment does carry the citation, or
+ * the citations Kanoon lists for the named one. Nothing here is generated.
+ */
+export function wrongCitationNote(citation: string, named: PrecedentRow, owner: PrecedentRow | null): string {
+  if (owner && owner.judgment_id !== named.judgment_id) {
+    return `${citation} is the citation of ${owner.case_title}, not of the judgment you named. The judgment you named is below.`;
+  }
+  const listed = [...(named.reporter_citations ?? [])]
+    .sort((a, b) => citationRank(a) - citationRank(b))
+    .slice(0, 3);
+  return listed.length > 0
+    ? `Indian Kanoon does not list ${citation} for this judgment. It lists: ${listed.join('; ')}.`
+    : `Indian Kanoon does not list ${citation} for this judgment.`;
+}
+
+/** SCC first, then AIR, then the rest - the order an advocate cites them in. */
+function citationRank(citation: string): number {
+  if (/\bSCC\s+\d|\(\d+\)\s*SCC\b|\d\s+SCC\s+\d/i.test(citation) && !/SCC\s*\(\s*Cri/i.test(citation)) return 0;
+  if (/^AIR\b/i.test(citation)) return 1;
+  return 2;
+}
+
+/** The note for a question that assumes an absolute rule, over a topic list only (citation-match.ts). */
+function premiseNote(question: string, namedCase: { found: boolean } | undefined, results: number): string | null {
+  return !namedCase && results > 0 && assumesAbsoluteRule(question) ? ABSOLUTE_RULE_NOTE : null;
 }
 
 /**
@@ -162,14 +197,24 @@ function courtWeight(row: PrecedentRow): number {
  * documented operators run to the next operator, and a title operand followed by
  * `doctypes:patna` could otherwise be read as a title containing "doctypes".
  */
-export function kanoonQueries(intent: ClassifiedIntent): string[] {
+export function kanoonQueries(intent: ClassifiedIntent, opts: { skipCitation?: boolean } = {}): string[] {
   const court = courtFilter(intent.rawText);
   // "in 100 words" is about the reply. Left in, Kanoon scores judgments on it.
   const searchQuery = withoutLengthRequest(intent.searchQuery);
 
-  // 1. A citation the advocate pasted. Unique on its own, so no court scope.
-  const citation = extractCitations(intent.rawText)[0];
-  if (citation) return unique([`cite: ${citation}`, searchQuery]);
+  /*
+   * 1. A citation the advocate pasted. Unique on its own, so no court scope.
+   *
+   * In the form Kanoon prints it first, then as typed (citation-match.ts):
+   * `cite: (2014) 2 SCC 1` finds the judgments citing Lalita Kumari, `cite:
+   * 2014 (2) SCC 1` finds Lalita Kumari. No free-text attempt after them: the
+   * free text of a citation is every judgment that quotes it.
+   *
+   * Skipped when a case name came with it and the citation turned out not to
+   * be that case's - the name is then searched on its own (search()).
+   */
+  const citation = opts.skipCitation ? undefined : extractCitations(intent.rawText)[0];
+  if (citation) return unique(kanoonCitationForms(citation).map((form) => `cite: ${form}`));
 
   // 2. A named case.
   const name = extractCaseName(intent.rawText);
@@ -190,7 +235,15 @@ export function kanoonQueries(intent: ClassifiedIntent): string[] {
   // 3. A provision, kept to the court the advocate named.
   const provision = provisionPhrase(intent);
   if (provision) {
-    return unique([court ? `${provision} doctypes:${court}` : provision, searchQuery]);
+    const scoped = court ? `${provision} doctypes:${court}` : provision;
+    /*
+     * "Which case held that the procedure under Article 21 must be just, fair
+     * and reasonable?" asks for the judgment that said those words. The
+     * provision alone - "Article 21" - is every Article 21 judgment, and the
+     * search stops at the first attempt that returns anything. The words of
+     * the holding go first.
+     */
+    return asksWhichCase(intent.rawText) ? unique([searchQuery, scoped]) : unique([scoped, searchQuery]);
   }
 
   // 4. A topic: its words, and the court - named in the question or in the
@@ -338,6 +391,12 @@ export interface PrecedentSearchResult {
    * wherever it was decided.
    */
   grouping?: PrecedentGrouping;
+  /**
+   * Said above the results, on both channels: a citation that is not the
+   * named case's, a rule the question assumes. Facts read off Kanoon's own
+   * records or off the question - never generated.
+   */
+  notes?: string[];
   latencyMs: number;
 }
 
@@ -432,14 +491,42 @@ export class PrecedentsService {
          * one, in parallel so it costs no time, and each is cached.
          */
         const scoped = priorityQueries(intent, homeState);
-        // The leading judgments are looked for alongside, not after: the
-        // model's names and their title searches run while these do.
-        const [found, homeRows, supremeRows, leading] = await Promise.all([
-          this.searchKanoon(intent),
-          scoped?.home ? this.searchKanoonQuietly(scoped.home) : [],
-          scoped?.supreme ? this.searchKanoonQuietly(scoped.supreme) : [],
-          this.leadingJudgments(intent),
-        ]);
+        const citation = extractCitations(intent.rawText)[0] ?? null;
+        /*
+         * A citation is looked up as a citation: in Kanoon's spelling, and
+         * judged on the judgment's own list of citations (findByCitation).
+         *
+         * With a case name beside it, the citation must be that case's. When
+         * it is not - "Arnesh Kumar v. State of Bihar, (2019) 3 SCC 112" - the
+         * name is searched on its own and the reply says the citation is wrong.
+         * Both questions came back "No judgment found" because only the
+         * citation was ever searched (live test, 7 Oct, J-FK-11 and J-FK-12).
+         */
+        let found: PrecedentRow[];
+        let homeRows: PrecedentRow[] = [];
+        let supremeRows: PrecedentRow[] = [];
+        let leading: PrecedentRow[] = [];
+        let wrongCitation: { citation: string; owner: PrecedentRow | null } | null = null;
+        if (citation) {
+          const cited = await this.findByCitation(citation);
+          const name = extractCaseName(intent.rawText);
+          const theirs = name ? cited.filter((row) => caseNameScore(name, row.case_title) >= CASE_NAME_MATCH) : cited;
+          if (name && theirs.length === 0) {
+            found = await this.searchKanoon(intent, { skipCitation: true });
+            wrongCitation = { citation, owner: cited[0] ?? null };
+          } else {
+            found = theirs;
+          }
+        } else {
+          // The leading judgments are looked for alongside, not after: the
+          // model's names and their title searches run while these do.
+          [found, homeRows, supremeRows, leading] = await Promise.all([
+            this.searchKanoon(intent),
+            scoped?.home ? this.searchKanoonQuietly(scoped.home) : [],
+            scoped?.supreme ? this.searchKanoonQuietly(scoped.supreme) : [],
+            this.leadingJudgments(intent),
+          ]);
+        }
         const { precedents, namedCase } = this.forNamedCase(intent.rawText, found);
         // Promote first, enrich second. The other way round pays for documents
         // the advocate will never see and leaves the top of the page empty.
@@ -454,6 +541,10 @@ export class PrecedentsService {
         const searchedAt = Date.now();
         const headed = await this.withHeaders(ordered);
         const headedAt = Date.now();
+        const notes = [
+          wrongCitation && namedCase?.found && headed[0] ? wrongCitationNote(wrongCitation.citation, headed[0], wrongCitation.owner) : null,
+          premiseNote(intent.rawText, namedCase, headed.length),
+        ].filter((note): note is string => note !== null);
         /*
          * The card summaries and a named case's own summary are written at the
          * same time: both read the extracts withHeaders just fetched, and
@@ -486,6 +577,7 @@ export class PrecedentsService {
           grouping: leading.length
             ? { ...(byCourt ?? { homeCourt: null, byCourt: false }), leading: leading.length }
             : byCourt,
+          ...(notes.length > 0 ? { notes } : {}),
           totalMatches: precedents[0]?.total_matches ?? precedents.length,
           // Kanoon runs its own relevance ranking; the local dense/lexical
           // distinction does not apply, so this is never a degraded state.
@@ -531,8 +623,8 @@ export class PrecedentsService {
    * Cost: a hit on the first attempt is one call, as before. Only a miss pays
    * for the broader ones.
    */
-  private async searchKanoon(intent: ClassifiedIntent): Promise<PrecedentRow[]> {
-    const attempts = kanoonQueries(intent);
+  private async searchKanoon(intent: ClassifiedIntent, opts: { skipCitation?: boolean } = {}): Promise<PrecedentRow[]> {
+    const attempts = kanoonQueries(intent, opts);
     const name = extractCaseName(intent.rawText);
 
     const matching = (rows: PrecedentRow[]): PrecedentRow[] =>
@@ -568,6 +660,43 @@ export class PrecedentsService {
 
     if (failures === attempts.length) throw lastError;
     return ordersOnly.length > 0 ? ordersOnly : nearest;
+  }
+
+  /**
+   * The judgments Kanoon prints this citation on - or none.
+   *
+   * Each spelling (citation-match.ts) is sent to Kanoon's `cite:` operator in
+   * turn. A result is accepted only when the citation is on the judgment
+   * itself: the search result carries one citation, the first, so the first
+   * CITATION_PROBE results have their headers read for the rest. Headers are
+   * cached by Kanoon id, so the enrichment that follows costs nothing again.
+   *
+   * Cost: one search when the first spelling answers on its first citation; at
+   * most two searches and six header reads for a citation that is not there.
+   */
+  private async findByCitation(citation: string): Promise<PrecedentRow[]> {
+    const forms = kanoonCitationForms(citation);
+    let failures = 0;
+    let lastError: unknown = null;
+
+    for (const form of forms) {
+      try {
+        const rows = await this.kanoon.search(`cite: ${form}`, this.maxResults);
+        const listed = rows.filter((row) => carriesCitation(row, citation));
+        if (listed.length > 0) return listed;
+        const read = await this.withHeaders(rows.slice(0, CITATION_PROBE));
+        const matches = read.filter((row) => carriesCitation(row, citation));
+        if (matches.length > 0) return matches;
+        this.logger.info({ form, results: rows.length }, 'No judgment carries this citation - trying the next spelling');
+      } catch (err) {
+        failures += 1;
+        lastError = err;
+        this.logger.warn({ err, form }, 'Kanoon citation search failed - trying the next spelling');
+      }
+    }
+
+    if (failures === forms.length) throw lastError;
+    return [];
   }
 
   /**
@@ -859,10 +988,12 @@ export class PrecedentsService {
       ? prioritiseHomeCourt(named.precedents, homeState)
       : arrangeByCourt({ home: [], supreme: [], general: named.precedents }, homeState, named.precedents.length);
 
+    const premise = premiseNote(intent.rawText, named.namedCase, ordered.length);
     return {
       precedents: await this.withPrinciples(ordered, words),
       namedCase: named.namedCase,
       grouping: named.namedCase ? undefined : { homeCourt: homeCourtName(homeState) },
+      ...(premise ? { notes: [premise] } : {}),
       totalMatches: precedents[0]?.total_matches ?? precedents.length,
       lexicalOnly: !embedding,
       source: 'local',

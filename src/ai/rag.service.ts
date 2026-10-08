@@ -8,14 +8,14 @@ import { DraftReleaser } from './draft-release';
 import { EmbeddingService } from './embedding.service';
 import { GuardrailsService } from './guardrails.service';
 import { ClassifiedIntent } from './intent.service';
-import { NEW_CRIMINAL_CODES, expandQuery, topicQuery } from './legal-patterns';
+import { NEW_CRIMINAL_CODES, expandQuery, extractStatuteRefs, isHinglish, namedActs, namedOtherAct, topicQuery } from './legal-patterns';
 import {
   buildGeneralLegalPrompt,
   buildPrecedentSearchPrompt,
   buildSectionExplanationPrompt,
   buildSmallTalkPrompt,
 } from './prompts';
-import { nonexistentProvision } from './provision-range';
+import { nonexistentProvision, OLD_NUMBER_HINT } from './provision-range';
 import { LlmMessage } from './providers/llm-provider.interface';
 import { ProviderRegistry } from './providers/provider.registry';
 import { kanoonSearchLink, ProvisionTarget, provisionTarget, StatuteFetcher } from './statute-fetcher';
@@ -63,6 +63,12 @@ export interface RagAnswer {
   unavailable?: boolean;
   /** With `unavailable`: the provision asked about, as the reply names it - "Section 2 of the Companies Act, 2013". */
   provision?: string;
+  /**
+   * A fixed reply that delivers no research: a question back ("IPC 302 or BNS
+   * 302?"), or "none of the sections answers this". Refunded by the channel,
+   * and never sent to the web search - there is nothing to look for.
+   */
+  free?: boolean;
 }
 
 /**
@@ -123,10 +129,20 @@ export class RagService {
   ): Promise<RagAnswer> {
     const started = Date.now();
 
+    // A bare number both penal codes use for different offences, with no code
+    // named: asked back, free (ambiguousNumber).
+    const ambiguous = await this.ambiguousNumber(intent, history, started);
+    if (ambiguous) return ambiguous;
+
     // A number past the end of its Act has a certain answer, and it is not
     // one to hand to a model told to stop when it is unsure.
     const impossible = nonexistentProvision(intent.actCode, intent.sectionNumber);
-    if (impossible) return fixedAnswer(impossible, 'rule:provision-range', started);
+    if (impossible) {
+      // "BNS 498A" does not exist; IPC 498A does, and the table says where it went.
+      const mapping = await this.oldCodeMapping(intent);
+      const text = mapping ? `${impossible.replace(`\n\n${OLD_NUMBER_HINT}`, '')}\n\n${mapping}` : impossible;
+      return fixedAnswer(text, 'rule:provision-range', started);
+    }
 
     const target = provisionTarget(intent);
     onStage?.('retrieving');
@@ -184,6 +200,21 @@ export class RagService {
       }
     }
 
+    /*
+     * The number of one code with the subject of another: "BNS 302 murder ki
+     * saza" - BNS 302 is wounding religious feelings; murder was IPC 302 and is
+     * BNS 103(1). See numberCollision.
+     */
+    const collision = await this.numberCollision(intent, statutes);
+    if (collision) {
+      const ids = new Set(collision.rows.map((r) => r.id));
+      statutes = [...collision.rows, ...statutes.filter((s) => !ids.has(s.id))];
+    }
+
+    // An old section the table maps to nothing: what the new code has that is
+    // close, labelled as not a counterpart (relatedProvisions).
+    statutes = [...statutes, ...(await this.relatedProvisions(intent, statutes))];
+
     if (statutes.length === 0) {
       /*
        * Nothing official for a provision the advocate named. This used to be
@@ -203,7 +234,164 @@ export class RagService {
       return this.answerGeneral(intent, started, history, onStage);
     }
 
-    return this.explain(statutes, intent, started, history, onStage);
+    return this.explain(statutes, intent, started, history, onStage, collision ?? undefined);
+  }
+
+  /**
+   * "What is the punishment under Section 302?", "धारा 307 की सजा क्या है?" -
+   * no code named, and the number is two different offences: IPC 302 is
+   * murder (now BNS 103(1)), BNS 302 is wounding religious feelings.
+   *
+   * Both were answered about the BNS section alone, with nothing to say the
+   * advocate probably meant the other (live tests of 4 and 7 October, T-18,
+   * T-17). The answer is a question back with both meanings, read off the
+   * official table, and it costs nothing.
+   *
+   * Only for the penal codes, only when the question is about an offence
+   * (PENAL_WORDS), and only when no code is named in it or in the turns before
+   * it. A number the BNS does not have is left to the rule that reads it as
+   * the IPC's (intent.service.ts).
+   */
+  private async ambiguousNumber(intent: ClassifiedIntent, history: LlmMessage[], started: number): Promise<RagAnswer | null> {
+    const n = intent.sectionNumber?.trim().toUpperCase() ?? '';
+    if (!/^\d+[A-Z]?$/.test(n) || intent.actName) return null;
+    if (namedActs(intent.rawText).size > 0 || namedOtherAct(intent.rawText)) return null;
+    if (history.some((turn) => namedActs(turn.content).size > 0)) return null;
+    if (!PENAL_WORDS.test(intent.rawText) || nonexistentProvision('BNS', n)) return null;
+
+    const [wasIpc, bnsRows] = await Promise.all([
+      this.corpus.recodifiedFrom('IPC', n),
+      this.corpus.searchStatutes(intent.searchQuery, n, 'BNS', 3),
+    ]);
+    const bns = bnsRows.find((r) => r.act_code.toUpperCase() === 'BNS' && baseOf(r.section_number) === n);
+    if (!bns || wasIpc.length === 0) return null;
+    // IPC N became BNS N itself: one offence, nothing to ask.
+    if (wasIpc.every((r) => baseOf(r.section_number) === n)) return null;
+
+    const now = wasIpc.map((r) => `*${r.mapped_to}* - ${r.section_title}`).join(' and ');
+    const hindi = /[ऀ-ॿ]/.test(intent.rawText);
+    const text = hindi
+      ? [
+          `*धारा ${n}* - आपने संहिता नहीं बताई, और इस संख्या के दो अलग अर्थ हैं:`,
+          `• *IPC ${n}* (1 जुलाई 2024 से पहले के अपराध) अब ${now} है।`,
+          `• *BNS ${n}* - ${bns.section_title}`,
+          `संहिता के साथ फिर पूछें - *IPC ${n}* या *BNS ${n}*।`,
+        ].join('\n\n')
+      : [
+          `*Section ${n}* - you have not said which code, and the number is two different provisions:`,
+          `• *IPC ${n}* (offences before 1 July 2024) is now ${now}.`,
+          `• *BNS ${n}* - ${bns.section_title}`,
+          `Ask again with the code - *IPC ${n}* or *BNS ${n}* - and I will explain it.`,
+        ].join('\n\n');
+    return { ...fixedAnswer(text, 'rule:ambiguous-number', started), free: true };
+  }
+
+  /**
+   * For a new-code number that does not exist: where the same old-code number
+   * went. "FIR is under BNS 498A" was answered "Section 498 of the BNS does not
+   * exist" and nothing more (live test, 7 Oct, T-08); the advocate needed
+   * "IPC 498A is BNS 85 and 86".
+   */
+  private async oldCodeMapping(intent: ClassifiedIntent): Promise<string | null> {
+    const old = intent.actCode ? OLD_CODE_FOR[intent.actCode] : undefined;
+    const n = intent.sectionNumber?.trim().toUpperCase();
+    if (!old || !n || nonexistentProvision(old, n)) return null;
+    const rows = await this.corpus.recodifiedFrom(old, n);
+    if (rows.length === 0) return null;
+    const label = old === 'CRPC' ? 'CrPC' : old;
+    return `If you mean *${label} ${n}*, the official 2023 correspondence table maps it to ${rows
+      .map((r) => `*${r.mapped_to}* (${r.section_title})`)
+      .join(' and ')}.`;
+  }
+
+  /**
+   * A new-code section named with the subject of the old code's section of
+   * the same number - the trap the recodification set.
+   *
+   * "BNS 302 murder ki saza kya hai?" was answered about BNS 302 (wounding
+   * religious feelings) and ended "murder is under a different provision" -
+   * without naming it. "BNS 323 mein hurt ki saza" asked the advocate to supply
+   * the section; "criminal conspiracy under BNS 120" was "not covered" (live
+   * tests, T-01, T-04, T-12). Each time the old code's section of that number
+   * - or a lettered one beside it, IPC 120A and 120B - is the subject asked
+   * about, and the official table says where it went.
+   *
+   * Fires only when a subject word of the question is in neither the title nor
+   * the text of the section named, and is in the title of what the old number
+   * became. "BNS 316 ... bail" does not fire: IPC 316's section is not about
+   * bail. The answer then opens with a fixed line saying both things, and is
+   * written about the section the subject belongs to.
+   */
+  private async numberCollision(
+    intent: ClassifiedIntent,
+    statutes: StatuteRow[],
+  ): Promise<{ rows: StatuteRow[]; lead: string; asked: string } | null> {
+    const act = intent.actCode;
+    const old = act ? OLD_CODE_FOR[act] : undefined;
+    const n = intent.sectionNumber?.trim().toUpperCase() ?? '';
+    if (!act || !old || !/^\d+$/.test(n)) return null;
+
+    const named = statutes.find((s) => s.act_code.toUpperCase() === act && baseOf(s.section_number) === n);
+    if (!named) return null;
+    const words = subjectWords(intent.rawText);
+    if (words.length === 0) return null;
+    const own = `${named.section_title} ${named.section_text}`.toLowerCase();
+    if (words.some((word) => own.includes(stem(word)))) return null;
+
+    const became = (await this.corpus.recodifiedFrom(old, n, true)).filter((r) => words.some((word) => titleHas(r, word)));
+    if (became.length === 0) return null;
+
+    // One entry per section, with every old section that went into it.
+    const sections = new Map<string, { row: StatuteRow; from: string[] }>();
+    for (const row of became) {
+      const entry = sections.get(row.id) ?? { row, from: [] };
+      const whole = `${row.act_code} ${baseOf(row.section_number)}`;
+      entry.from.push(row.mapped_to && row.mapped_to !== whole ? `${row.mapped_from} (now ${row.mapped_to})` : `${row.mapped_from}`);
+      sections.set(row.id, entry);
+    }
+    const listed = [...sections.values()];
+    const label = `${act} ${n}`;
+    const lead =
+      `*${label}* is "${named.section_title}". The section on what you asked about is ` +
+      listed.map(({ row, from }) => `*${row.act_code} ${baseOf(row.section_number)}* ("${row.section_title}"), formerly ${from.join(' and ')}`).join('; ') +
+      '.';
+    const first = listed[0].row;
+    return {
+      rows: listed.map(({ row }) => row),
+      lead,
+      asked: `${first.act_code} Section ${baseOf(first.section_number)} - the advocate wrote ${label}, which is a different provision ("${named.section_title}"); a line saying so is already printed above your answer, so do not repeat it`,
+    };
+  }
+
+  /**
+   * An old-code section the official table maps to nothing, and a new-code
+   * section on the same subject.
+   *
+   * "IPC 309 attempt to suicide ka BNS mein kya hua?" was answered "no
+   * equivalent" - true of the table, and incomplete: BNS 226 punishes an
+   * attempt at suicide made to compel or restrain a public servant (live test,
+   * 4 Oct, O-02). The new code is searched for the words of the old section's
+   * title, and what it finds is given to the model marked as related, not a
+   * counterpart (formatStatutes).
+   */
+  private async relatedProvisions(intent: ClassifiedIntent, statutes: StatuteRow[]): Promise<StatuteRow[]> {
+    const act = intent.actCode;
+    const newCode = act ? NEW_CODE_FOR[act] : undefined;
+    const n = intent.sectionNumber?.trim().toUpperCase() ?? '';
+    if (!act || !newCode || !n) return [];
+    const asked = statutes.find((s) => s.act_code.toUpperCase() === act && baseOf(s.section_number) === baseOf(n));
+    if (!asked || !Array.isArray(asked.correspondence) || asked.correspondence.length > 0) return [];
+
+    // Words of the title that are a subject: IPC 143's title is just
+    // "Punishment", which every other section's title also has.
+    const words = subjectWords(asked.section_title ?? '').filter((w) => w.length >= 4);
+    if (words.length === 0) return [];
+    const found = await this.corpus.searchStatutes(words.join(' '), null, newCode, 3);
+    const label = `${act === 'CRPC' ? 'CrPC' : act} ${n}`;
+    return found
+      .filter((row) => row.act_code.toUpperCase() === newCode && words.filter((w) => titleHas(row, w)).length >= Math.ceil(words.length / 2))
+      .slice(0, 2)
+      .map((row) => ({ ...row, related_to: label }));
   }
 
   /**
@@ -241,9 +429,11 @@ export class RagService {
     started: number,
     history: LlmMessage[],
     onStage?: RagProgress,
+    /** From numberCollision: the provision to explain instead, and the line said above the answer. */
+    instead?: { asked: string; lead: string },
   ): Promise<RagAnswer> {
-    const system = buildSectionExplanationPrompt(statutes, intent.language, describeProvision(intent));
-    return this.generate(system, intent, [], statutes, started, history, onStage);
+    const system = buildSectionExplanationPrompt(statutes, replyLanguage(intent), instead?.asked ?? describeProvision(intent));
+    return this.generate(system, intent, [], statutes, started, history, onStage, { lead: instead?.lead, given: statutes, subjectOnly: !intent.sectionNumber });
   }
 
   /** Case law research over the judgment corpus. */
@@ -311,7 +501,7 @@ export class RagService {
     onStage?: RagProgress,
   ): Promise<RagAnswer> {
     const started = startedAt ?? Date.now();
-    const system = buildGeneralLegalPrompt(intent.language);
+    const system = buildGeneralLegalPrompt(replyLanguage(intent));
     return this.generate(system, intent, [], [], started, history, onStage);
   }
 
@@ -370,7 +560,16 @@ export class RagService {
     startedAt: number,
     history: LlmMessage[] = [],
     onStage?: RagProgress,
+    opts: {
+      /** A fixed line printed above the model's answer, in drafts and in the answer (numberCollision). */
+      lead?: string;
+      /** The provisions the model was given - checked against what it wrote (GuardrailsService). */
+      given?: StatuteRow[];
+      /** A subject question: the model may answer NOT_COVERED (prompts.ts). */
+      subjectOnly?: boolean;
+    } = {},
   ): Promise<RagAnswer> {
+    const lead = opts.lead ? `${opts.lead}\n\n` : '';
     onStage?.('generating');
     const generating = Date.now();
     const request = {
@@ -387,10 +586,10 @@ export class RagService {
     let firstDraftAt: number | null = null;
     const drafts = onStage
       ? new DraftReleaser(
-          (prefix, known) => this.guardrails.verifiedDraft(prefix, intent, known),
+          (prefix, known) => this.guardrails.verifiedDraft(prefix, intent, known, opts.given, history),
           (draft) => {
             firstDraftAt ??= Date.now();
-            onStage({ draft });
+            onStage({ draft: draft ? `${lead}${draft}` : draft });
           },
         )
       : null;
@@ -402,7 +601,7 @@ export class RagService {
     // Every generated answer passes through verification before anyone sees it.
     onStage?.('verifying');
     const verifying = Date.now();
-    const checked = await this.guardrails.verify(result.text, passages, intent, history);
+    const checked = await this.guardrails.verify(result.text, passages, intent, history, opts.given);
     this.logger.info(
       {
         intent: intent.intent,
@@ -417,8 +616,19 @@ export class RagService {
       'Answer timings',
     );
 
+    /*
+     * None of the provisions found answers a subject question. The model was
+     * told to say only NOT_COVERED (prompts.ts), and the reply is fixed and
+     * free: "Corpus mein hit and run ke liye koi specific section nahi mil raha"
+     * and "The corpus doesn't cover that BSA section" were each charged two
+     * credits (live test, 7 Oct, O-04, N-12).
+     */
+    if (opts.subjectOnly && /^\s*NOT_COVERED\b/.test(checked.text)) {
+      return { ...fixedAnswer(notCoveredReply(intent), 'rule:not-covered', startedAt), statutes: [], free: true };
+    }
+
     return {
-      text: checked.text,
+      text: `${lead}${checked.text}`,
       citations: checked.verifiedCitations,
       passages,
       statutes,
@@ -484,6 +694,64 @@ function fixedAnswer(text: string, model: string, started: number, unavailable =
 
 /** The code that replaced each old one, for saying that a section has no counterpart in it. */
 const NEW_CODE_FOR: Record<string, string> = { IPC: 'BNS', CRPC: 'BNSS', IEA: 'BSA' };
+/** The code each new one replaced. */
+const OLD_CODE_FOR: Record<string, 'IPC' | 'CRPC' | 'IEA'> = { BNS: 'IPC', BNSS: 'CRPC', BSA: 'IEA' };
+
+/** A question about an offence: its punishment, its ingredients, whether bail is granted. */
+const PENAL_WORDS =
+  /punish|\bsaza+\b|\bsazaa\b|सज़ा|सजा|दंड|\bdand\b|offen[cs]e|अपराध|\bcrime\b|\bbail|जमानत|ingredients|cogni[sz]able/i;
+
+/** Words of a question that say what is asked, not what it is about. */
+const GENERIC_WORDS = new Set([
+  'punishment', 'punished', 'punish', 'penalty', 'sentence', 'imprisonment', 'fine', 'ingredients', 'ingredient',
+  'definition', 'define', 'defined', 'meaning', 'provision', 'criminal', 'explain', 'essential', 'elements', 'element',
+  'years', 'year', 'maximum', 'minimum', 'kitni', 'kitna', 'whoever', 'person', 'persons',
+]);
+
+/** The subject of a question - topicQuery's words without the ones every question about an offence has. */
+export function subjectWords(text: string): string[] {
+  return topicQuery(text)
+    .split(' ')
+    .filter((w) => w.length >= 3 && !GENERIC_WORDS.has(w));
+}
+
+/** "403(1)" -> "403". */
+function baseOf(section: string): string {
+  return section.split('(')[0].trim().toUpperCase();
+}
+
+/** Near enough for "offences" and "offence", as titleHas reads them. */
+function stem(word: string): string {
+  return word.slice(0, Math.max(4, word.length - 2));
+}
+
+/** The reply language: Hinglish when the question is (legal-patterns.ts, isHinglish), else the router's. */
+function replyLanguage(intent: ClassifiedIntent): string {
+  return intent.language === 'en' && isHinglish(intent.rawText) ? 'hinglish' : intent.language;
+}
+
+function notCoveredReply(intent: ClassifiedIntent): string {
+  return intent.language === 'hi'
+    ? 'Ley Legal में रखी BNS, BNSS और BSA की धाराओं में से किसी से इसका उत्तर नहीं मिला। विषय को अधिनियम के शब्दों में लिखें, या धारा संख्या पता हो तो वह बताएं।'
+    : "None of the sections Ley Legal holds answers this. Try the subject in the words the Act would use, or name the section if you know it.";
+}
+
+/**
+ * The provisions to list under an answer: the ones it actually names.
+ *
+ * Everything retrieved was listed. "BNS 316(5) purane IPC mein Section 409
+ * tha" - right - sat over a list naming IPC 406, which is plain criminal
+ * breach of trust; "BSA 23(1) ... IEA 25" over IEA 27 (live tests, M-REV-007,
+ * M-REV-017, O-12). An answer that names none of them keeps the list as it was.
+ */
+export function statutesShown(text: string, statutes: StatuteRow[]): StatuteRow[] {
+  const named = new Set(extractStatuteRefs(text).map((ref) => {
+    const [act, section] = ref.split(' ');
+    return `${act} ${baseOf(section ?? '')}`;
+  }));
+  const shown = statutes.filter((s) => named.has(`${s.act_code.toUpperCase()} ${baseOf(s.section_number)}`));
+  return shown.length > 0 ? shown : statutes;
+}
 
 /** How long "the judgment corpus is empty" (or not) is believed before it is read again. */
 const CORPUS_CHECK_MS = 10 * 60_000;
