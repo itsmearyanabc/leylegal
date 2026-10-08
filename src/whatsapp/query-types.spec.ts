@@ -745,3 +745,32 @@ describe('when no verified source has the answer', () => {
     expect(sent(api)).not.toContain('Unverified information');
   });
 });
+
+/** Fix 2 - fixed replies that deliver no research cost nothing, as on the website. */
+describe('a reply that delivers no research', () => {
+  it('refunds a question back and never searches the web (T-17)', async () => {
+    const webFind = jest.fn();
+    const { service, api, credits, rag } = build({ intent: 'SECTION_LOOKUP', conversations: atMenu(), webFind });
+    rag.answer.mockResolvedValueOnce({
+      text: '*Section 302* - you have not said which code, and the number is two different provisions:',
+      citations: [], passages: [], statutes: [], model: 'rule:ambiguous-number', inputTokens: 0, outputTokens: 0,
+      latencyMs: 1, guardrailTriggered: false, guardrailReason: null, mocked: false, free: true,
+    });
+
+    await service.handle(job({ text: 'What is the punishment under Section 302?' }));
+
+    expect(webFind).not.toHaveBeenCalled();
+    expect(credits.refund).toHaveBeenCalledWith('user-1', 'GUEST_LAWYER', 'spend:wa:wamid.1', 'No research delivered');
+    expect(sent(api)).toContain('No credits were charged for this question.');
+  });
+
+  it('declines to write an assignment, free (S-MT-07)', async () => {
+    const { service, api, credits, rag } = build({ intent: 'SECTION_LOOKUP', conversations: atMenu() });
+
+    await service.handle(job({ text: 'Write my 2,000-word assignment on Article 21.' }));
+
+    expect(credits.spend).not.toHaveBeenCalled();
+    expect(rag.answer).not.toHaveBeenCalled();
+    expect(sent(api)).toContain('Ley Legal is not built to write assignments.');
+  });
+});

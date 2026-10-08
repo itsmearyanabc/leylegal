@@ -1,10 +1,99 @@
 import { Injectable } from '@nestjs/common';
 import { getLogger } from '../common/logger';
 import { CorpusRepository } from '../database/repositories/corpus.repository';
-import { RetrievedChunk } from '../database/types';
+import { RetrievedChunk, StatuteRow } from '../database/types';
 import { ClassifiedIntent } from './intent.service';
 import { extractCitations, extractStatuteRefs } from './legal-patterns';
+import { PROMPT_GIVEN_REFS } from './prompts';
 import { LlmMessage } from './providers/llm-provider.interface';
+
+/** The six criminal codes, whose section numbers are checked against what the model was given. */
+const CODES = new Set(['IPC', 'BNS', 'CRPC', 'BNSS', 'IEA', 'BSA']);
+
+/** "BNS 103(1)" -> "BNS 103". */
+function baseRef(ref: string): string {
+  const [act, section = ''] = ref.toUpperCase().split(' ');
+  return `${act} ${section.split('(')[0]}`;
+}
+
+/**
+ * Every section the model was given for this answer: the provisions found,
+ * both sides of their official correspondence, the facts every prompt states
+ * (prompts.ts, CRIMINAL_CODES), the provision asked about, and anything said
+ * earlier in the conversation.
+ */
+export function groundedRefs(given: StatuteRow[], intent?: ClassifiedIntent, history: LlmMessage[] = []): Set<string> {
+  const refs = new Set<string>(PROMPT_GIVEN_REFS.map(baseRef));
+  for (const row of given) {
+    refs.add(baseRef(`${row.act_code} ${row.section_number}`));
+    for (const pair of row.correspondence ?? []) {
+      for (const side of pair.split('=')) {
+        const ref = side.trim().replace(/^CrPC\b/i, 'CRPC');
+        if (ref) refs.add(baseRef(ref));
+      }
+    }
+  }
+  if (intent?.actCode && intent.sectionNumber) refs.add(baseRef(`${intent.actCode} ${intent.sectionNumber}`));
+  for (const turn of history) for (const ref of extractStatuteRefs(turn.content)) refs.add(baseRef(ref));
+  return refs;
+}
+
+/**
+ * A sentence that classifies an offence: cognizable, bailable, compoundable.
+ * In Hindi and Hinglish too.
+ */
+const CLASSIFICATION =
+  /\b(?:non[- ]?)?(?:cogni[sz]able|bailable|compoundable)\b|संज्ञेय|जमानती|ज़मानती|शमनीय|\b(?:gair[- ]?)?(?:zamanati|jamanati)\b/i;
+
+export const CLASSIFICATION_NOTE =
+  '_Whether the offence is cognizable, bailable or compoundable is set out in the First Schedule to the BNSS, which Ley Legal does not hold yet, so it is left out here._';
+
+/** A note after the answer - or alone, when nothing of the answer is left. */
+function withNote(text: string, note: string): string {
+  return text.trim() ? `${text}\n\n${note}` : note;
+}
+
+/**
+ * Remove what the answer says about an offence's classification when nothing
+ * it was given says it.
+ *
+ * Migration 0021 does not load the First Schedule ("cannot be read reliably"),
+ * so the classification of almost every offence is absent - and the model
+ * supplied it from memory: IPC 143 "non-bailable" (it is bailable), mischief
+ * "cognizable" (simple mischief is not) (live test, 4 Oct, M-IPC-007,
+ * M-IPC-053). The prompt already said "where the material states it"; this
+ * makes it so. Kept when a provision given carries a classification, or uses
+ * the word itself - BNSS 478 is about bailable offences.
+ */
+export function stripUnsupportedClassification(text: string, given: StatuteRow[]): { text: string; stripped: boolean } {
+  const supported = given.some(
+    (row) =>
+      (row.punishment && (row.is_cognizable !== null || row.is_bailable !== null || row.is_compoundable !== null)) ||
+      CLASSIFICATION.test(`${row.section_title} ${row.section_text}`),
+  );
+  if (supported || !CLASSIFICATION.test(text)) return { text, stripped: false };
+
+  let stripped = false;
+  const lines: string[] = [];
+  for (const line of text.split('\n')) {
+    if (!CLASSIFICATION.test(line)) {
+      lines.push(line);
+      continue;
+    }
+    // A heading or a bullet stays; what follows it is filtered sentence by sentence.
+    const prefix = /^\s*(?:[-•*]\s+)?(?:\*[^*\n]{1,40}:\*\s*)?/.exec(line)?.[0] ?? '';
+    const kept = line
+      .slice(prefix.length)
+      .split(/(?<=[.!?।])\s+/)
+      .filter((sentence) => !CLASSIFICATION.test(sentence))
+      .join(' ')
+      .trim();
+    stripped = true;
+    if (kept) lines.push(`${prefix}${kept}`);
+    else if (/\*[^*]+:\*/.test(prefix)) lines.push(prefix.trimEnd());
+  }
+  return { text: lines.join('\n'), stripped };
+}
 
 export interface GuardrailReport {
   /** The answer after removing anything that could not be verified. */
@@ -52,16 +141,47 @@ export class GuardrailsService {
 
   constructor(private readonly corpus: CorpusRepository) {}
 
-  async verify(answer: string, retrieved: RetrievedChunk[], intent?: ClassifiedIntent, history: LlmMessage[] = []): Promise<GuardrailReport> {
+  /**
+   * `given`: the provisions the model was handed, for a section answer. With
+   * it, a section number of the six codes that is none of them - nor their
+   * official counterparts, nor a fact the prompt states - is struck, as an
+   * invented one is: "BNS Section 302 - Ingredients of Criminal Intimidation"
+   * was written for a question about a threat (live test, 4 Oct, B-10). BNS
+   * 302 exists, so the database check alone passed it; intimidation is BNS
+   * 351. And what the answer says about classification is removed unless
+   * something given says it (stripUnsupportedClassification).
+   */
+  async verify(
+    answer: string,
+    retrieved: RetrievedChunk[],
+    intent?: ClassifiedIntent,
+    history: LlmMessage[] = [],
+    given?: StatuteRow[],
+  ): Promise<GuardrailReport> {
     if (!answer.trim()) {
       return { text: answer, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null };
     }
 
+    let classificationStripped = false;
+    if (given) {
+      const result = stripUnsupportedClassification(answer, given);
+      answer = result.text;
+      classificationStripped = result.stripped;
+    }
+
     const citations = extractCitations(answer);
     const statuteRefs = extractStatuteRefs(answer);
+    const ungrounded = given ? this.ungrounded(statuteRefs, given, intent, history) : [];
 
     if (citations.length === 0 && statuteRefs.length === 0) {
-      return { text: answer, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null };
+      return {
+        text: classificationStripped ? withNote(answer, CLASSIFICATION_NOTE) : answer,
+        verifiedCitations: [],
+        removed: [],
+        flagged: [],
+        triggered: classificationStripped,
+        reason: classificationStripped ? 'unsupported classification removed' : null,
+      };
     }
 
     // Everything the model was actually shown, normalised for comparison.
@@ -110,11 +230,14 @@ export class GuardrailsService {
         removedStatuteRefs.push(check.ref);
       }
     }
+    // Real sections, but not among those looked up for this question.
+    const offTopic = ungrounded.filter((ref) => !removedStatuteRefs.includes(ref));
 
     let text = answer;
     for (const item of removed) {
       text = removedStatuteRefs.includes(item) ? this.strikeStatuteRef(text, item) : this.strike(text, item);
     }
+    for (const ref of offTopic) text = this.strikeStatuteRef(text, ref);
 
     if (removed.length > 0) {
       // Without this the advocate cannot tell the answer was altered, and an
@@ -124,8 +247,13 @@ export class GuardrailsService {
       // section - which, with a corpus of a few dozen sections, is most of them.
       text += "\n\n_One or more references could not be verified against Ley Legal's database of statutes and judgments and were removed._";
     }
+    if (offTopic.length > 0) {
+      text += '\n\n_A section number that was not among the provisions looked up for this question was removed._';
+    }
+    if (classificationStripped) text = withNote(text, CLASSIFICATION_NOTE);
+    removed.push(...offTopic);
 
-    const triggered = removed.length > 0 || flagged.length > 0;
+    const triggered = removed.length > 0 || flagged.length > 0 || classificationStripped;
 
     if (triggered) {
       this.logger.warn(
@@ -144,6 +272,7 @@ export class GuardrailsService {
         ? [
             removed.length > 0 ? `${removed.length} unverifiable reference(s) removed` : null,
             flagged.length > 0 ? `${flagged.length} citation(s) not in retrieved context` : null,
+            classificationStripped ? 'unsupported classification removed' : null,
           ]
             .filter(Boolean)
             .join('; ')
@@ -168,9 +297,19 @@ export class GuardrailsService {
    * lookup throws: the caller stops showing drafts rather than show one
    * unchecked.
    */
-  async verifiedDraft(prefix: string, intent: ClassifiedIntent | undefined, known: Map<string, boolean>): Promise<string> {
+  async verifiedDraft(
+    prefix: string,
+    intent: ClassifiedIntent | undefined,
+    known: Map<string, boolean>,
+    given?: StatuteRow[],
+    history: LlmMessage[] = [],
+  ): Promise<string> {
+    // The same two checks as verify(), line for line, so a draft never shows
+    // what the finished answer will not.
+    if (given) prefix = stripUnsupportedClassification(prefix, given).text;
     const citations = extractCitations(prefix);
     const statuteRefs = extractStatuteRefs(prefix);
+    const ungrounded = given ? this.ungrounded(statuteRefs, given, intent, history) : [];
     const askedStatute = intent?.actCode && intent?.sectionNumber
       ? `${intent.actCode} ${intent.sectionNumber}`.toUpperCase()
       : null;
@@ -191,8 +330,14 @@ export class GuardrailsService {
 
     let text = prefix;
     for (const citation of citations) if (known.get(`c:${citation}`)) text = this.strike(text, citation);
-    for (const ref of statuteRefs) if (known.get(`s:${ref}`)) text = this.strikeStatuteRef(text, ref);
+    for (const ref of statuteRefs) if (known.get(`s:${ref}`) || ungrounded.includes(ref)) text = this.strikeStatuteRef(text, ref);
     return text;
+  }
+
+  /** The section references of the six codes in an answer that the model was not given. */
+  private ungrounded(refs: string[], given: StatuteRow[], intent?: ClassifiedIntent, history: LlmMessage[] = []): string[] {
+    const grounded = groundedRefs(given, intent, history);
+    return refs.filter((ref) => CODES.has(ref.split(' ')[0]) && !grounded.has(baseRef(ref)));
   }
 
   /** Strip punctuation and case so "AIR 2018 S.C. 1234" matches "AIR 2018 SC 1234". */

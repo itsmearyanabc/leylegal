@@ -11,7 +11,7 @@ import { SettingsService } from '../settings/settings.service';
 // WhatsApp message, so sharing the closing copy is the honest dependency.
 import { CAVEAT, RETURN_TO_MENU } from '../whatsapp/replies';
 import { EmbeddingService } from './embedding.service';
-import { ClassifiedIntent } from './intent.service';
+import { asksWhichCase, ClassifiedIntent } from './intent.service';
 import { CASE_NAME_MATCH, CaseName, caseNameScore, extractCaseName, looseTitle, samePetitioner } from './case-name';
 import { ABSOLUTE_RULE_NOTE, assumesAbsoluteRule, kanoonCitationForms, sameCitation } from './citation-match';
 import { expandQuery, extractCitations } from './legal-patterns';
@@ -238,14 +238,6 @@ export function kanoonQueries(intent: ClassifiedIntent, opts: { skipCitation?: b
 /** The first attempt - what Kanoon is asked before any fallback. */
 export function kanoonQuery(intent: ClassifiedIntent): string {
   return kanoonQueries(intent)[0];
-}
-
-/**
- * "Which case held ...", "leading case on ...", "landmark judgment on ...",
- * "सुप्रीम कोर्ट का फैसला" - a request for the judgment that decided a point.
- */
-export function asksWhichCase(text: string): boolean {
-  return /\b(?:which|what)\s+(?:case|judg(?:e)?ment|decision)\b|\b(?:leading|landmark)\s+(?:case|judg(?:e)?ment|decision)s?\b|फ़ैसल|फ़ैसल|फैसल|निर्णय/i.test(text);
 }
 
 function unique(queries: string[]): string[] {

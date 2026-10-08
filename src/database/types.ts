@@ -122,6 +122,16 @@ export interface StatuteRow {
    * which are summaries, not enacted text. Attached by searchStatutes.
    */
   source_url?: string | null;
+  /**
+   * Set on a section given to the model as related to the provision asked
+   * about but NOT its official counterpart - BNS 226 (attempt to commit suicide
+   * to compel a public servant) for IPC 309, which the table maps to nothing.
+   * The label of the provision asked about; formatStatutes says what it means.
+   */
+  related_to?: string;
+  /** CorpusRepository.recodifiedFrom: the pair it was found through, as the table writes them - "IPC 302", "BNS 103(1)". */
+  mapped_from?: string;
+  mapped_to?: string;
 }
 
 /** A retrieved passage, as returned by hybrid_search_judgments(). */

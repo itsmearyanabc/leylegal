@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
-import { IntentService } from '../ai/intent.service';
+import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService } from '../ai/intent.service';
 import { extractCnr } from '../ai/legal-patterns';
 import { costLine, WebFallbackService } from '../ai/web-fallback';
 import { looksLikeCnrAttempt, looksLikeEnrolmentAttempt } from './onboarding';
@@ -1036,6 +1036,13 @@ export class ConversationService {
       await this.users.setLanguage(user.id, intent.language);
     }
 
+    // An assignment to be written is declined, free, before anything is
+    // charged - as on the website (intent.service.ts, asksToWriteAssignment).
+    if (asksToWriteAssignment(text)) {
+      await this.api.sendText(job.from, `${ASSIGNMENT_REPLY}\n\n${costLine(0, false)}`);
+      return {};
+    }
+
     switch (intent.intent) {
       case 'SMALL_TALK': {
         // Deliberately not quota-checked: greeting the bot must never consume
@@ -1412,19 +1419,26 @@ export class ConversationService {
     // No official text for the provision asked about. What the web has, apart
     // and marked unverified, for one credit (web-fallback.ts); if nothing, the
     // reply says so and the charge taken in answerSearch() goes back.
-    const unverified = answer.unavailable ? await this.web.find('provision', originalText, answer.provision ?? null) : null;
+    const unverified = answer.unavailable && !answer.free ? await this.web.find('provision', originalText, answer.provision ?? null) : null;
     let unverifiedCost = 0;
     if (unverified) {
       unverifiedCost = (await this.credits.chargeUnverified(user.id, user.role, spendReference(job.waMessageId))) ?? CREDIT_COST.SECTION_LOOKUP;
-    } else if (answer.unavailable) {
-      await this.credits.refund(user.id, user.role, spendReference(job.waMessageId), 'No official text for that provision');
+    } else if (answer.unavailable || answer.free) {
+      // A fixed reply that delivers no research - a question back, "none of
+      // the sections answers this" - costs nothing, as on the website.
+      await this.credits.refund(
+        user.id,
+        user.role,
+        spendReference(job.waMessageId),
+        answer.free ? 'No research delivered' : 'No official text for that provision',
+      );
     }
 
     let text = answer.text.trim();
     if (!text) {
       text = 'I could not produce an answer for that. Try rephrasing, or type *menu* for other options.';
     }
-    if (answer.unavailable) {
+    if (answer.unavailable || answer.free) {
       text += `\n\n${costLine(unverifiedCost, unverified !== null)}`;
     }
     if (unverified) {

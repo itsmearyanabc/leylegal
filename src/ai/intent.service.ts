@@ -264,6 +264,24 @@ export class IntentService {
       if (classified.intent === 'GENERAL_LEGAL') classified.intent = 'SECTION_LOOKUP';
     }
 
+    /*
+     * A provision question that asks for the case that decided it is a
+     * judgment search.
+     *
+     * "Compensation for custodial death under Article 32 - leading case" and
+     * "Which case held that the procedure under Article 21 must be just, fair
+     * and reasonable?" were read as section lookups on Articles 32 and 21, and
+     * answered by the model from memory: "the corpus doesn't cover a specific
+     * leading case", and Maneka Gandhi tagged "[unverified]" with no citation.
+     * "धारा 482 CrPC ... सुप्रीम कोर्ट का फैसला" the same way, Bhajan Lal
+     * "[unverified]" (live tests, J-PL-14, S-SL-02, J-PL-70). The words are
+     * explicit, so they decide - after every rule above that can set
+     * SECTION_LOOKUP, so none of them undoes it.
+     */
+    if (classified.intent === 'SECTION_LOOKUP' && asksWhichCase(text)) {
+      classified.intent = 'PRECEDENT_SEARCH';
+    }
+
     return classified;
   }
 
@@ -341,7 +359,7 @@ export class IntentService {
      * court hold about Order 39 injunctions in NDPS matters" still reaches the
      * model, which is genuinely a research question.
      */
-    if (order && trimmed.length <= 32 && !asksForJudgments(trimmed)) {
+    if (order && trimmed.length <= 32 && !asksForJudgments(trimmed) && !asksWhichCase(trimmed)) {
       return {
         ...base,
         intent: 'SECTION_LOOKUP',
@@ -477,7 +495,13 @@ const PROVISION = /^(?:(?:SECTION|SEC\.?|ARTICLE|ART\.?|ORDER)\s*)?\d+[A-Z]{0,3}
 
 function sectionFrom(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
-  const section = String(value).trim().toUpperCase();
+  /*
+   * "SECTION 106" is section 106. Kept with the word, it was printed as "I
+   * don't have the official text of Section SECTION 106 of the BSA" (live
+   * test, 4 Oct, M-IEA-024). Articles and Orders keep theirs - "Article 21"
+   * and "Order 39" are how those provisions are named.
+   */
+  const section = String(value).trim().toUpperCase().replace(/^(?:SECTION|SEC\.?)\s*/, '');
   return PROVISION.test(section) ? section : null;
 }
 
@@ -495,6 +519,39 @@ export function asksWhichSection(text: string): boolean {
     /\bkaun\s*s[aie]\b.{0,25}\b(?:section|dhara)\b|\b(?:section|dhara)\b.{0,25}\bkaun\s*s[aie]\b/i.test(text) ||
     // No \b here: JavaScript's word boundary does not see Devanagari letters.
     /कौन\s*(?:सी|सा)\s*(?:धारा|section)|(?:धारा|section)\s*कौन\s*(?:सी|सा)/i.test(text)
+  );
+}
+
+/**
+ * A request to write the student's assignment, essay or dissertation.
+ *
+ * "Write my 2,000-word assignment on Article 21" was declined in words - and
+ * charged two credits as a section lookup (live test, 4 Oct, S-MT-07). The
+ * homepage says Ley Legal is "not built to write your assignment"; the reply
+ * is now fixed and free (web/chat.service.ts).
+ */
+export function asksToWriteAssignment(text: string): boolean {
+  return (
+    /\b(?:write|draft|prepare|make)\b[^.?!\n]{0,40}\b(?:assignment|essay|dissertation|thesis|term\s+paper|project\s+report|homework)s?\b/i.test(text) ||
+    /\b\d[\d,]*\s*-?\s*words?\s+(?:assignment|essay|answer)\b/i.test(text)
+  );
+}
+
+export const ASSIGNMENT_REPLY =
+  "Ley Legal is not built to write assignments. It can find what you would cite in one: ask for the leading judgments " +
+  'on your topic, or for the sections that apply, and build the assignment from those.';
+
+/**
+ * "Which case held ...", "leading case on ...", "landmark judgment", and in
+ * Hindi "सुप्रीम कोर्ट का फैसला" - a request for the judgment that decided a
+ * point. Narrow on purpose: "decision" and "निर्णय" alone are also how a
+ * provision question is asked ("decision of the Magistrate under BNSS 175").
+ */
+export function asksWhichCase(text: string): boolean {
+  return (
+    /\b(?:which|what)\s+(?:case|judg(?:e)?ment)s?\b|\b(?:leading|landmark)\s+(?:case|judg(?:e)?ment|decision)s?\b/i.test(text) ||
+    // No \b: JavaScript's word boundary does not see Devanagari letters.
+    /(?:सुप्रीम|उच्चतम|हाई|उच्च)\s*(?:कोर्ट|न्यायालय)\s*(?:का|के|की)\s*(?:फ़ैसल|फ़ैसल|फैसल|निर्णय)/.test(text)
   );
 }
 

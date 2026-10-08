@@ -642,3 +642,51 @@ describe('notes above a judgment list (Fix 1b)', () => {
     ]);
   });
 });
+
+/** Fix 2 - section lookups. */
+describe('section lookup replies that deliver no research (Fix 2)', () => {
+  it('refunds a question back, says so, and never searches the web (T-17)', async () => {
+    const webFind = jest.fn();
+    const { service, credits, rag } = build({ intent: 'SECTION_LOOKUP', webFind });
+    rag.answer.mockResolvedValueOnce({
+      text: '*Section 302* - you have not said which code, and the number is two different provisions:',
+      citations: [], passages: [], statutes: [], model: 'rule:ambiguous-number', inputTokens: 0, outputTokens: 0,
+      latencyMs: 1, guardrailTriggered: false, guardrailReason: null, mocked: false, free: true,
+    });
+
+    const events = await ask(service, 'What is the punishment under Section 302?');
+
+    expect(webFind).not.toHaveBeenCalled();
+    expect(credits.refund).toHaveBeenCalledWith('user-1', 'GUEST_LAWYER', expect.any(String), 'No research delivered');
+    expect(answers(events)).toBe(
+      '*Section 302* - you have not said which code, and the number is two different provisions:\n\nNo credits were charged for this question.',
+    );
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.charged).toBe(0);
+  });
+
+  it('declines an assignment before charging (S-MT-07)', async () => {
+    const { service, credits, rag } = build({ intent: 'SECTION_LOOKUP' });
+
+    const events = await ask(service, 'Write my 2,000-word assignment on Article 21.');
+
+    expect(credits.spend).not.toHaveBeenCalled();
+    expect(rag.answer).not.toHaveBeenCalled();
+    expect(answers(events)).toMatch(/^Ley Legal is not built to write assignments\./);
+  });
+
+  it('lists only the provisions the answer names (M-REV-007)', async () => {
+    const { service, rag } = build({ intent: 'SECTION_LOOKUP' });
+    const statute = (act_code: string, section_number: string, section_title: string) => ({ act_code, act_name: act_code, section_number, section_title });
+    rag.answer.mockResolvedValueOnce({
+      text: 'BNS 316(5) purane IPC mein Section 409 tha.',
+      citations: [], passages: [], statutes: [statute('BNS', '316', 'Criminal breach of trust'), statute('IPC', '406', 'Punishment for criminal breach of trust')],
+      model: 'm', inputTokens: 1, outputTokens: 1, latencyMs: 1, guardrailTriggered: false, guardrailReason: null, mocked: false,
+    });
+
+    const events = await ask(service, 'BNS 316(5) purane IPC mein kaunsa section tha?');
+
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect((answer?.message.structured as { statutes: { sectionNumber: string }[] }).statutes.map((s) => s.sectionNumber)).toEqual(['316']);
+  });
+});

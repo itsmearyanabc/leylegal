@@ -283,6 +283,47 @@ export class CorpusRepository {
     return rows;
   }
 
+  /**
+   * The new-code sections an old-code section became, by the official table -
+   * "IPC 302" gives BNS 103 (mapped to "BNS 103(1)") - with the new section's
+   * text. With `siblings`, the lettered sections of the same number too: IPC
+   * 120 brings IPC 120A and 120B, criminal conspiracy, now BNS 61.
+   *
+   * For a question that names a new-code number with an old code's subject:
+   * "BNS 302 murder ki saza" means IPC 302 (rag.service.ts, numberCollision).
+   * One row per pair, the whole section's row rather than a seeded sub-section
+   * row (0006 seeded "103(1)" beside 0021's "103").
+   */
+  async recodifiedFrom(oldAct: string, section: string, siblings = false): Promise<StatuteRow[]> {
+    const act = oldAct.toUpperCase();
+    const exact = section.toUpperCase();
+    const base = exact.replace(/[^0-9].*$/, '');
+    const rows = await this.db.sql<(StatuteRow & { old_section: string; new_section: string })[]>`
+      SELECT DISTINCT ON (c.old_section, c.new_section)
+             s.id, s.act_code, s.act_name, s.section_number, s.section_title, s.section_text,
+             s.punishment, s.is_cognizable, s.is_bailable, s.is_compoundable, s.triable_by,
+             s.corresponding_act, s.corresponding_section,
+             'RECODIFIED'::TEXT AS match_type, 900.0::DOUBLE PRECISION AS score,
+             c.old_section, c.new_section
+        FROM statute_correspondence c
+        JOIN statutes s
+          ON upper(s.act_code) = upper(c.new_act)
+         AND split_part(upper(s.section_number), '(', 1) = split_part(upper(c.new_section), '(', 1)
+       WHERE upper(c.old_act) = ${act}
+         AND (upper(c.old_section) = ${exact}
+              OR (${siblings} AND upper(c.old_section) ~ ('^' || ${base} || '[A-Z]+$')))
+         AND s.language = 'en'
+       ORDER BY c.old_section, c.new_section, (s.section_number LIKE '%(%') ASC
+    `;
+    const label = (code: string, number: string) => `${code === 'CRPC' ? 'CrPC' : code} ${number}`;
+    const mapped = rows.map(({ old_section, new_section, ...row }) => ({
+      ...row,
+      mapped_from: label(act, old_section),
+      mapped_to: label(row.act_code.toUpperCase(), new_section),
+    }));
+    return this.withCorrespondence(mapped);
+  }
+
   /** Sections of Acts outside the loaded codes with this number - the fetched ones. */
   async lawsWithSection(section: string, excludeActs: readonly string[]): Promise<StatuteRow[]> {
     return this.db.sql<StatuteRow[]>`

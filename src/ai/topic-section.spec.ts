@@ -157,7 +157,16 @@ describe('a question asking which section', () => {
     expect(intent.sectionNumber).toBeNull();
   });
 
-  it.each(['302', '498A', '103(1)', '167(2)', 'Article 21', 'Order 39 Rule 1', 'section 65B'])('keeps a real one: %p', async (section) => {
+  it.each([
+    ['302', '302'],
+    ['498A', '498A'],
+    ['103(1)', '103(1)'],
+    ['167(2)', '167(2)'],
+    ['Article 21', 'ARTICLE 21'],
+    ['Order 39 Rule 1', 'ORDER 39 RULE 1'],
+    // Without the word: "SECTION 65B" was printed "Section SECTION 65B" (Fix 2, M-IEA-024).
+    ['section 65B', '65B'],
+  ])('keeps a real one: %p', async (section, kept) => {
     const registry = {
       complete: jest.fn().mockResolvedValue({
         text: JSON.stringify({ intent: 'SECTION_LOOKUP', section_number: section, confidence: 0.8 }),
@@ -165,7 +174,7 @@ describe('a question asking which section', () => {
       }),
     };
     const intent = await new IntentService(registry as never).classify(`explain ${section}`);
-    expect(intent.sectionNumber?.toUpperCase()).toBe(section.toUpperCase());
+    expect(intent.sectionNumber?.toUpperCase()).toBe(kept);
   });
 
   it('is looked up in the codes even when the router called it general', async () => {

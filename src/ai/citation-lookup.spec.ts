@@ -1,7 +1,8 @@
 import { PrecedentRow } from '../database/types';
 import { ABSOLUTE_RULE_NOTE, assumesAbsoluteRule, canonicalCitation, kanoonCitationForms, sameCitation } from './citation-match';
 import { extractCitations } from './legal-patterns';
-import { asksWhichCase, kanoonQueries, PrecedentsService, wrongCitationNote } from './precedents.service';
+import { asksWhichCase } from './intent.service';
+import { kanoonQueries, PrecedentsService, wrongCitationNote } from './precedents.service';
 
 /**
  * Finding a judgment by its citation (Fix 1b).

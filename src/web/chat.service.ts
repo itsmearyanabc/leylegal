@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { IntentService } from '../ai/intent.service';
+import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService } from '../ai/intent.service';
 import { extractCnr } from '../ai/legal-patterns';
 import { costLine, impossibleCitation, impossibleCitationHindi, UnverifiedInfo, WebFallbackService } from '../ai/web-fallback';
 import {
@@ -11,7 +11,7 @@ import {
   stripEllipsis,
 } from '../ai/precedents.service';
 import { ProviderRegistry } from '../ai/providers/provider.registry';
-import { RagDraft, RagService, RagStage } from '../ai/rag.service';
+import { RagDraft, RagService, RagStage, statutesShown } from '../ai/rag.service';
 import { CircuitOpenError } from '../common/circuit-breaker';
 import { getLogger } from '../common/logger';
 import { CREDIT_COST, CreditBalance, CreditsService } from '../credits/credits.service';
@@ -250,6 +250,21 @@ export class ChatService {
     // the product feel like a vending machine.
     if (intent.intent === 'SMALL_TALK') {
       yield* this.answerSmallTalk({ user, threadId, question, language: intent.language });
+      return;
+    }
+
+    // An assignment to be written is declined before anything is charged: the
+    // reply is fixed, and it delivers no research (intent.service.ts).
+    if (asksToWriteAssignment(question)) {
+      const message = await this.chats.appendMessage({
+        threadId,
+        userId: user.id,
+        role: 'assistant',
+        content: `${ASSIGNMENT_REPLY} ${costLine(0, false)}`,
+        intent: 'UNSUPPORTED',
+        creditsCharged: 0,
+      });
+      yield { type: 'answer', message: toPublic(message), credits: await this.credits.peek(user.id, user.role), charged: 0 };
       return;
     }
 
@@ -730,7 +745,13 @@ export class ChatService {
     // nothing either, an answer was not delivered - refunded, as a search that
     // found nothing is.
     let unverified: UnverifiedInfo | null = null;
-    if (answer.unavailable) {
+    // A fixed reply that delivers no research - a question back, "none of the
+    // sections answers this" - costs nothing and is not searched on the web.
+    if (answer.free) {
+      if (charged > 0) await this.credits.refund(user.id, user.role, reference, 'No research delivered');
+      charged = 0;
+      text = `${text}\n\n${/[ऀ-ॿ]/.test(question) ? 'आपसे कोई क्रेडिट नहीं लिया गया।' : costLine(0, false)}`;
+    } else if (answer.unavailable) {
       yield { type: 'stage', stage: 'searching-web' };
       unverified = await this.web.find('provision', question, answer.provision ?? null);
       if (unverified) {
@@ -757,7 +778,8 @@ export class ChatService {
         // provider is a placeholder, and an advocate who mistakes one for legal
         // research is the worst outcome this system has.
         mocked,
-        statutes: answer.statutes.map((s) => ({
+        // Only the provisions the answer names (rag.service.ts, statutesShown).
+        statutes: statutesShown(text, answer.statutes).map((s) => ({
           actCode: s.act_code,
           actName: s.act_name,
           sectionNumber: s.section_number,
