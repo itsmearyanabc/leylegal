@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectEnv } from '../config/config.module';
 import { AppEnv } from '../config/env';
-import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService, productReply } from '../ai/intent.service';
+import { ASSIGNMENT_REPLY, asksForReminder, asksToWriteAssignment, IntentService, productReply } from '../ai/intent.service';
 import { extractCnr } from '../ai/legal-patterns';
 import { costLine, impossibleCitation, WebFallbackService } from '../ai/web-fallback';
 import { looksLikeCnrAttempt, looksLikeEnrolmentAttempt } from './onboarding';
@@ -1046,7 +1046,8 @@ export class ConversationService {
     // question about Ley Legal itself: a fixed reply, free, before anything is
     // charged - as on the website (intent.service.ts, productReply).
     const fixedReply = asksToWriteAssignment(text) ? ASSIGNMENT_REPLY : productReply(text);
-    if (fixedReply) {
+    // "Track my case DLCT..." with a CNR is still the status; a reminder is not (C-12).
+    if (fixedReply && (!intent.cnrNumber || asksForReminder(text))) {
       await this.api.sendText(job.from, `${fixedReply}\n\n${costLine(0, false)}`);
       return {};
     }

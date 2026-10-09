@@ -295,6 +295,24 @@ export class IntentService {
       classified.intent = 'PRECEDENT_SEARCH';
     }
 
+    /*
+     * Where a section of the codes went is a section lookup, whatever the
+     * router called it. "Convert IEA 114A to the new code" and "CrPC की धारा
+     * 164 अब BNSS में कौन सी धारा है?" were labelled UNSUPPORTED or general and
+     * answered in one line - the same question gets the section, a summary and
+     * the punishment as a section lookup (client's audit, 9 Oct, pattern O:
+     * M-IEA-027, M-CRPC-017, M-IPC-041, M-IPC-055).
+     */
+    if (
+      (classified.intent === 'GENERAL_LEGAL' || classified.intent === 'UNSUPPORTED') &&
+      classified.sectionNumber &&
+      classified.actCode &&
+      CODES_OF_RECODIFICATION.includes(classified.actCode) &&
+      asksForCounterpart(text)
+    ) {
+      classified.intent = 'SECTION_LOOKUP';
+    }
+
     return classified;
   }
 
@@ -473,6 +491,9 @@ export class IntentService {
 /** The code each of the 2023 codes replaced. */
 const OLD_CODE_FOR: Partial<Record<ActCode, ActCode>> = { BNS: 'IPC', BNSS: 'CRPC', BSA: 'IEA' };
 
+/** The six codes the 2023 correspondence table maps between. */
+const CODES_OF_RECODIFICATION: readonly ActCode[] = ['IPC', 'BNS', 'CRPC', 'BNSS', 'IEA', 'BSA'];
+
 /** Whether the number of a provision - "304B", "Order 39 Rule 1", "Article 21" - appears in any of these texts. */
 export function writtenIn(provision: string, texts: string[]): boolean {
   const number = /\d+/.exec(provision)?.[0];
@@ -541,6 +562,19 @@ export function asksWhichSection(text: string): boolean {
 }
 
 /**
+ * "Convert CrPC 357 to the new code", "IPC 141 ka BNS mein kaunsa section",
+ * "CrPC की धारा 164 अब BNSS में कौन सी धारा है?" - where a section went, which
+ * the official table answers. Not a point of law.
+ */
+export function asksForCounterpart(text: string): boolean {
+  return (
+    /\b(?:convert|new\s+code|old\s+code|new\s+criminal\s+laws?|equivalent|correspond(?:s|ing)?|counterpart|replaced\s+by|purane?|naye?)\b|\b(?:ka|ki|ke)\s+(?:bns|bnss|bsa)\s+(?:mein|me|main)\b|\b(?:bns|bnss|bsa|ipc|crpc|iea)\s+(?:mein|me|main)\s+(?:kaunsa|kaun\s*sa|konsa|kya)\b/i.test(text) ||
+    // No \b: JavaScript's word boundary does not see Devanagari letters.
+    /(?:अब|पुराने|पुरानी|नए|नई)\s*(?:BNSS|BNS|BSA|IPC|CrPC|IEA)?\s*(?:में|की)\s*कौन\s*(?:सी|सा)\s*धारा/i.test(text)
+  );
+}
+
+/**
  * A request to write the student's assignment, essay or dissertation.
  *
  * "Write my 2,000-word assignment on Article 21" was declined in words - and
@@ -553,6 +587,19 @@ export function asksToWriteAssignment(text: string): boolean {
     /\b(?:write|draft|prepare|make)\b[^.?!\n]{0,40}\b(?:assignment|essay|dissertation|thesis|term\s+paper|project\s+report|homework)s?\b/i.test(text) ||
     /\b\d[\d,]*\s*-?\s*words?\s+(?:assignment|essay|answer)\b/i.test(text)
   );
+}
+
+/**
+ * A court document asked to be drafted - a bail application, a petition, a
+ * memorial. Not one of Ley Legal's tools: "Draft a bail application for my
+ * client accused under BNS 115(2)" got a full application with placeholders
+ * and assumed facts; "Draft the full petitioner memorial for my moot on
+ * Section 377" a structure with no authorities (client's audit, 9 Oct, B-04,
+ * S-MT-08). Answered with what the document would rest on instead
+ * (rag.service.ts, answerPointOfLaw).
+ */
+export function asksToDraft(text: string): boolean {
+  return /\b(?:draft|prepare|write|frame)\b[^.?!\n]{0,40}\b(?:application|petition|memorial|plaint|affidavit|written\s+statement|complaint|appeal|vakalatnama|legal\s+notice|rejoinder|agreement|deed|contract|bail\s+plea)s?\b/i.test(text);
 }
 
 export const ASSIGNMENT_REPLY =
@@ -581,13 +628,37 @@ export function productReply(text: string): string | null {
     /\b(?:track|monitor|keep\s+track\s+of|follow\s+up\s+on)\s+(?:all\s+)?(?:of\s+)?(?:my|our|the|these|those|his|her|their|client'?s?)?\s*(?:\w+\s+)?(?:cases?|matters?|hearings?)\b/i.test(text) ||
     /\b(?:alerts?|notif(?:y|ications?)|reminders?|remind\s+me)\b[^.?!\n]{0,25}\b(?:hearings?|hearing\s+dates?|next\s+(?:hearing\s+)?dates?|my\s+cases?)\b/i.test(text)
   ) {
-    return TRACKING_REPLY;
+    return /\bwhats\s?app\b/i.test(text) ? `${TRACKING_REPLY} ${WHATSAPP_NOT_OPEN}` : TRACKING_REPLY;
   }
   if (/\b(?:you|your|ley\s*legal|this\s+(?:app|tool|bot|service))\b[^.?!\n]{0,40}\blegal\s+advice\b|\blegal\s+advice\b[^.?!\n]{0,30}\b(?:you|your|ley\s*legal)\b/i.test(text)) {
     return ADVICE_REPLY;
   }
+  // "How do I delete my account and history?" got "You'll need to handle that
+  // outside of this chat service", for two credits (client's audit, 9 Oct,
+  // B-12). The privacy notice gives the route.
+  if (/\b(?:delete|remove|erase|close|deactivate|cancel)\b[^.?!\n]{0,20}\b(?:my\s+)?(?:account|profile|chat\s+history|search\s+history|data)\b/i.test(text)) {
+    return DELETE_ACCOUNT_REPLY;
+  }
   return null;
 }
+
+/**
+ * A reminder or an alert asked for - not a status asked about. "Remind me on
+ * WhatsApp before my next date in DLCT010012342024" got the status card for a
+ * credit and nothing about the reminder (client's audit, 9 Oct, C-12); "track my
+ * case DLCT..." still gets the status.
+ */
+export function asksForReminder(text: string): boolean {
+  return /\b(?:remind(?:er|ers)?|alerts?|notif(?:y|ications?))\b/i.test(text);
+}
+
+/** Said with TRACKING_REPLY when the message asks for WhatsApp, which is not open yet. */
+export const WHATSAPP_NOT_OPEN = 'Ley Legal on WhatsApp is not open yet.';
+
+export const DELETE_ACCOUNT_REPLY =
+  'To delete your Ley Legal account and its history, follow section 7 of the Privacy notice (the Privacy link at the foot of the ' +
+  'homepage): email the contact address given there from the email address on your account. Your account, profile, chat history ' +
+  'and search history are then erased within 30 days.';
 
 export const PRACTICE_REPLY =
   'Practice questions and MCQs are not live in Ley Legal yet - "New criminal laws practice" is planned for students. ' +

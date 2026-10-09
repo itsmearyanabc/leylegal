@@ -51,8 +51,30 @@ export function matchEarlierCase(typed: string, cases: EarlierCase[]): CaseNumbe
   return matches.size === 1 ? [...matches.values()][0] : null;
 }
 
-export function cnrNeededReply(typed: string | null, match: CaseNumberMatch | null): string {
+/**
+ * A CNR typed with a character too many or too few - four letters and the
+ * rest digits, 12 to 20 characters long, but not 16. "Check CNR
+ * DLCT0100123420245" (17) got the general "I need its CNR" with no word of
+ * what was wrong with the one given (client's audit, 9 Oct, C-05).
+ */
+export function wrongLengthCnr(text: string): string | null {
+  for (const match of text.matchAll(/\b([A-Z]{4}[0-9A-Z]{8,16})\b/gi)) {
+    const token = match[1];
+    if (token.length !== 16 && /^[A-Z]{4}\d/i.test(token) && /\d{6,}/.test(token)) return token.toUpperCase();
+  }
+  return null;
+}
+
+export function cnrNeededReply(typed: string | null, match: CaseNumberMatch | null, wrongLength: string | null = null): string {
   const free = 'No credits were charged.';
+
+  if (wrongLength) {
+    return [
+      `*${wrongLength}* has ${wrongLength.length} characters; a CNR has exactly 16 - four letters, then twelve characters (for example *${CNR_EXAMPLE}*). Check it against the case papers or the eCourts page and send it again.`,
+      '',
+      free,
+    ].join('\n');
+  }
 
   if (typed && match) {
     const parties = [match.case.petitioner, match.case.respondent].filter(Boolean).join(' vs ');

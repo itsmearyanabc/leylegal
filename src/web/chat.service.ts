@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ASSIGNMENT_REPLY, asksToWriteAssignment, IntentService, productReply } from '../ai/intent.service';
+import { ASSIGNMENT_REPLY, asksForReminder, asksToWriteAssignment, IntentService, productReply } from '../ai/intent.service';
 import { extractCnr } from '../ai/legal-patterns';
 import { costLine, impossibleCitation, impossibleCitationHindi, UnverifiedInfo, WebFallbackService } from '../ai/web-fallback';
 import {
@@ -22,7 +22,7 @@ import { CorpusRepository } from '../database/repositories/corpus.repository';
 import { ChatRepository } from '../database/repositories/chat.repository';
 import { ChatMessageRow, PrecedentRow, UserRow } from '../database/types';
 import { forBrowser } from '../ecourts/for-browser';
-import { caseNumberIn, cnrNeededReply, matchEarlierCase, otherQuestionNote, otherQuestionWithCnr } from '../ecourts/cnr-help';
+import { caseNumberIn, cnrNeededReply, matchEarlierCase, otherQuestionNote, otherQuestionWithCnr, wrongLengthCnr } from '../ecourts/cnr-help';
 import { CnrNotFoundError, EcourtsService } from '../ecourts/ecourts.service';
 import { StageChannel } from './stage-channel';
 
@@ -231,6 +231,26 @@ export class ChatService {
     // number wants that case, whatever else the sentence around it says, and
     // the classifier has no better information than the pattern does.
     const cnr = intent.cnrNumber ?? extractCnr(question);
+
+    // An assignment to be written, a feature Ley Legal does not have, a question
+    // about Ley Legal itself: answered before anything is charged - the reply
+    // is fixed, and it delivers no research (intent.service.ts, productReply).
+    // Before the CNR, for a reminder asked with one (C-12); "track my case
+    // DLCT..." with a CNR is still the status.
+    const fixedReply = asksToWriteAssignment(question) ? ASSIGNMENT_REPLY : productReply(question);
+    if (fixedReply && (!cnr || asksForReminder(question))) {
+      const message = await this.chats.appendMessage({
+        threadId,
+        userId: user.id,
+        role: 'assistant',
+        content: `${fixedReply} ${costLine(0, false)}`,
+        intent: 'UNSUPPORTED',
+        creditsCharged: 0,
+      });
+      yield { type: 'answer', message: toPublic(message), credits: await this.credits.peek(user.id, user.role), charged: 0 };
+      return;
+    }
+
     if (cnr) {
       yield* this.answerCaseStatus({ user, threadId, question, cnr, reference });
       return;
@@ -252,23 +272,6 @@ export class ChatService {
     // the product feel like a vending machine.
     if (intent.intent === 'SMALL_TALK') {
       yield* this.answerSmallTalk({ user, threadId, question, language: intent.language });
-      return;
-    }
-
-    // An assignment to be written, a feature Ley Legal does not have, a question
-    // about Ley Legal itself: answered before anything is charged - the reply
-    // is fixed, and it delivers no research (intent.service.ts, productReply).
-    const fixedReply = asksToWriteAssignment(question) ? ASSIGNMENT_REPLY : productReply(question);
-    if (fixedReply) {
-      const message = await this.chats.appendMessage({
-        threadId,
-        userId: user.id,
-        role: 'assistant',
-        content: `${fixedReply} ${costLine(0, false)}`,
-        intent: 'UNSUPPORTED',
-        creditsCharged: 0,
-      });
-      yield { type: 'answer', message: toPublic(message), credits: await this.credits.peek(user.id, user.role), charged: 0 };
       return;
     }
 
@@ -374,7 +377,7 @@ export class ChatService {
       threadId,
       userId: user.id,
       role: 'assistant',
-      content: cnrNeededReply(typed, match),
+      content: cnrNeededReply(typed, match, wrongLengthCnr(question)),
       intent: 'CASE_STATUS',
       latencyMs: Date.now() - started,
       creditsCharged: 0,

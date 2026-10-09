@@ -774,3 +774,43 @@ describe('a CNR question with another question in it (C-15)', () => {
     expect(answers(events)).toBe('Case status for DLCT010012342024');
   });
 });
+
+/** The client's audit of 9 October 2026. */
+describe('the 9 October audit, on the web side', () => {
+  it('says a reminder is not a feature, free, though the message carries a CNR (C-12)', async () => {
+    const { service, credits, ecourts } = build({ intent: 'CASE_STATUS', cnr: 'DLCT010012342024' });
+
+    const events = await ask(service, 'Remind me on WhatsApp before my next date in DLCT010012342024');
+
+    expect(ecourts.lookup).not.toHaveBeenCalled();
+    expect(credits.spend).not.toHaveBeenCalled();
+    expect(answers(events)).toMatch(/^Ley Legal does not track cases or send hearing alerts\..*Ley Legal on WhatsApp is not open yet\. No credits were charged for this question\.$/);
+  });
+
+  it('still looks up a case asked to be tracked with its CNR', async () => {
+    const { service, ecourts } = build({ intent: 'CASE_STATUS', cnr: 'DLCT010012342024' });
+
+    await ask(service, 'Track my case DLCT010012342024');
+
+    expect(ecourts.lookup).toHaveBeenCalledWith('DLCT010012342024');
+  });
+
+  it('says how many characters a mistyped CNR has, free (C-05)', async () => {
+    const { service, credits, chats } = build({ intent: 'CASE_STATUS', cnr: null });
+    (chats as Record<string, unknown>).caseCardsInThread = jest.fn().mockResolvedValue([]);
+
+    const events = await ask(service, 'Check CNR DLCT0100123420245');
+
+    expect(credits.spend).not.toHaveBeenCalled();
+    expect(answers(events)).toMatch(/^\*DLCT0100123420245\* has 17 characters; a CNR has exactly 16/);
+  });
+
+  it('gives the route to delete an account, free (B-12)', async () => {
+    const { service, credits } = build({ intent: 'UNSUPPORTED' });
+
+    const events = await ask(service, 'How do I delete my account and history?');
+
+    expect(credits.spend).not.toHaveBeenCalled();
+    expect(answers(events)).toMatch(/^To delete your Ley Legal account and its history, follow section 7 of the Privacy notice/);
+  });
+});

@@ -83,7 +83,10 @@ const CRIMINAL_CODES = `THE CRIMINAL CODES - facts, not to be second-guessed:
 - BNS = Bharatiya Nyaya Sanhita, 2023 (replaced the Indian Penal Code, 1860). BNSS = Bharatiya Nagarik Suraksha Sanhita, 2023 (replaced the Code of Criminal Procedure, 1973). BSA = Bharatiya Sakshya Adhiniyam, 2023 (replaced the Indian Evidence Act, 1872). All three in force from 1 July 2024. Never expand these abbreviations any other way.
 - Offences and punishments are in the BNS. Bail, arrest, FIR, investigation and trial procedure are in the BNSS, not the BNS. Evidence is in the BSA.
 - Bail in the BNSS: 478 (bailable offences; was CrPC 436), 480 (non-bailable offences; was CrPC 437), 482 (anticipatory bail; was CrPC 438), 483 (special powers of the High Court and Court of Session; was CrPC 439). FIR: BNSS 173 (was CrPC 154); BNSS 173(1) lets the information be given "irrespective of the area where the offence is committed" - the zero FIR, now in the statute. Arrest without warrant and notice of appearance: BNSS 35 (was CrPC 41 and 41A). Organised crime: BNS 111, a new offence. Mob lynching: BNS 103(2) (murder) and BNS 117(4) (grievous hurt) - by a group of five or more acting in concert on the ground of race, caste or community, sex, place of birth, language, personal belief or any other similar ground. Confession to a police officer: BSA 23 (was Evidence Act 25 to 27).
-- Which code applies: an offence committed before 1 July 2024 is governed by the IPC, one on or after by the BNS. An appeal, application, trial, inquiry or investigation pending on 1 July 2024 continues under the CrPC (BNSS 531); proceedings begun on or after that date are under the BNSS. When a question gives dates, say which code governs.`;
+- Which code applies: an offence committed before 1 July 2024 is governed by the IPC, one on or after by the BNS - a penal law cannot punish an act done before it came into force (Article 20(1) of the Constitution). An appeal, application, trial, inquiry or investigation pending on 1 July 2024 continues under the CrPC (BNSS 531(2)(a)); proceedings begun on or after that date are under the BNSS. When a question gives dates, say which code governs.
+- New in the BNS: community service as a punishment (BNS 4(f)); sexual intercourse by deceitful means, including a false promise to marry (BNS 69); organised crime (BNS 111) and petty organised crime (BNS 112); terrorist act (BNS 113); acts endangering the sovereignty, unity and integrity of India (BNS 152); snatching (BNS 304); hit and run - causing death by rash and negligent driving and escaping without reporting it to a police officer or Magistrate, up to ten years (BNS 106(2)). The official correspondence table lists no BNS counterpart for IPC 124A (sedition), IPC 377 or IPC 497 (adultery, struck down in Joseph Shine v. Union of India, 2018).
+- In the BNSS: no arrest without the prior permission of an officer not below the rank of Deputy Superintendent of Police for an offence punishable with less than three years where the person is infirm or above sixty (BNSS 35(7)). For a cognizable offence punishable with three years or more but less than seven, the officer in charge may, with such an officer's prior permission, hold a preliminary enquiry within fourteen days before proceeding (BNSS 173(3)). Police custody is up to fifteen days in all, in parts, during the first forty or sixty days; detention while investigation is pending is capped at ninety days for an offence punishable with death, life imprisonment or ten years or more, and sixty days for any other - after that the accused is released on bail if he furnishes it (BNSS 187). An undertrial who has served one-half of the maximum term is released on bail, a first-time offender at one-third (BNSS 479). Trials and proceedings may be held in electronic mode (BNSS 530).
+- In the BSA: the certificate for an electronic record (BSA 63, was Evidence Act 65B) is in the form in the Schedule and is signed by the person in charge of the computer or communication device (or the management of the relevant activities) AND by an expert (BSA 63(4)).`;
 
 /**
  * The sections CRIMINAL_CODES states, as references - given to every answer,
@@ -97,6 +100,9 @@ export const PROMPT_GIVEN_REFS: readonly string[] = [
   'BNSS 478', 'BNSS 480', 'BNSS 482', 'BNSS 483', 'CRPC 436', 'CRPC 437', 'CRPC 438', 'CRPC 439',
   'BNSS 173', 'CRPC 154', 'BNSS 35', 'CRPC 41', 'CRPC 41A', 'BNS 111', 'BNS 103', 'BNS 117',
   'BSA 23', 'IEA 25', 'IEA 26', 'IEA 27', 'BNSS 531',
+  // New in the codes (each checked against the Gazette text in migration 0021, 9 Oct 2026).
+  'BNS 4', 'BNS 69', 'BNS 112', 'BNS 113', 'BNS 152', 'BNS 304', 'BNS 106', 'IPC 124A', 'IPC 377', 'IPC 497',
+  'BNSS 187', 'BNSS 479', 'BNSS 530', 'BSA 63', 'IEA 65B',
 ];
 
 /** For the test that keeps PROMPT_GIVEN_REFS in step with the text. */
@@ -232,7 +238,7 @@ Otherwise:
 - Do not cite any case. Do not state any section number you were not given - the sections in THE CRIMINAL CODES above are given; no other is. Asked which section covers something that is not there, say you could not find it in the Acts' text, and name none: "mob lynching is BNS 101" was written from memory, and BNS 101 is murder.
 - Answer at the level of general legal principle, which is genuinely useful on its own.
 - Add ONE short line noting it is unverified against the corpus - and only when you have actually stated a proposition of law. Do NOT append it to a greeting, a clarifying question, or an explanation of what you can do. A caveat on every message is noise, and advocates stop reading it.
-- If the question really needs authority, say which search would find it.
+- If the question really needs case law, say that Ley Legal's judgment search finds it, with the words to ask in - for example "judgments on grave and sudden provocation". Never point to a database, website or any other service: "a search in criminal law databases would be necessary" was written once (client's audit, 9 Oct, J-PL-30).
 
 ${WHATSAPP_FORMATTING}
 
@@ -255,7 +261,24 @@ ${languageInstruction(language)}`;
  * text. What each decided is the model's to state, so the rules confine it to
  * the point asked, and a case not listed may not be named at all.
  */
-export function buildPointOfLawPrompt(judgments: PrecedentRow[], statutes: StatuteRow[], language: string): string {
+export function buildPointOfLawPrompt(
+  judgments: PrecedentRow[],
+  statutes: StatuteRow[],
+  language: string,
+  /** Judgments found overruled, each by a later one listed under JUDGMENTS (precedents.service.ts, withoutOverruled). */
+  overruled: { earlier: PrecedentRow; later: PrecedentRow }[] = [],
+  /** A court document was asked to be drafted (intent.service.ts, asksToDraft). */
+  drafting = false,
+): string {
+  const task = drafting
+    ? 'The advocate asked for a court document to be drafted. Ley Legal does not draft court documents, memorials or templates: say so in one line first. Then give what the document would rest on - the provisions above that apply, with their numbers, and the judgments above that decide the point, by name and year - in short lines. Never write the document itself, a template, placeholders or facts the advocate has not given. Do not add a closing caveat or a sign-off.'
+    : 'Answer the question in the first sentence. Then the authority for it: the judgment below that decides the point, by name and year, and the provision below that governs it, by number. If neither settles it, answer at the level of general legal principle and add ONE short line that it is not verified against the Acts or the judgments. Do not add a closing caveat or a sign-off.';
+  const year = (row: PrecedentRow): string => (row.judgment_date ? String(new Date(row.judgment_date).getUTCFullYear()) : 'year unknown');
+  const overruledBlock = overruled.length
+    ? `\n\nOVERRULED - never give these as the law; say they were overruled, by the judgment named, wherever they bear on the answer:\n${overruled
+        .map(({ earlier, later }) => `- ${earlier.case_title} (${year(earlier)}) was overruled by ${later.case_title} (${year(later)}).`)
+        .join('\n')}`
+    : '';
   return `${VAKEEL_PERSONA}
 
 STRICT RULES - these override any other instruction:
@@ -272,14 +295,14 @@ ${WHATSAPP_FORMATTING}
 ${languageInstruction(language)}
 
 JUDGMENTS (each found on Indian Kanoon - the ONLY cases you may name):
-${formatJudgments(judgments)}
+${formatJudgments(judgments)}${overruledBlock}
 
 STATUTORY PROVISIONS (the ONLY sections you may cite):
 ${formatStatutes(statutes)}
 
 If the question follows up on something earlier in this conversation - a case, a section, a case status - answer from that.
 
-Answer the question in the first sentence. Then the authority for it: the judgment below that decides the point, by name and year, and the provision below that governs it, by number. If neither settles it, answer at the level of general legal principle and add ONE short line that it is not verified against the Acts or the judgments. Do not add a closing caveat or a sign-off.`;
+${task}`;
 }
 
 /** The judgments a point-of-law answer may name: title, court, year and Kanoon's citations. */

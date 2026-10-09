@@ -1,7 +1,8 @@
 import { PrecedentRow, StatuteRow } from '../database/types';
 import { listedCitation } from './citation-match';
 import { GuardrailsService } from './guardrails.service';
-import { asksForCounterpart, RagService } from './rag.service';
+import { asksForCounterpart } from './intent.service';
+import { RagService } from './rag.service';
 
 /**
  * A point of law, answered from the leading judgments found on Indian Kanoon
@@ -79,7 +80,13 @@ function intent(over: Record<string, unknown>) {
   return { intent: 'GENERAL_LEGAL' as const, language: 'en', cnrNumber: null, sectionNumber: null, actCode: null, actName: null, searchQuery: 'q', rawText: 'q', confidence: 0.9, ...over };
 }
 
-function build(opts: { judgments?: PrecedentRow[]; byNumber?: StatuteRow[]; bySubject?: (act: string | null) => StatuteRow[]; model?: string }) {
+function build(opts: {
+  judgments?: PrecedentRow[];
+  overruled?: { earlier: PrecedentRow; later: PrecedentRow }[];
+  byNumber?: StatuteRow[];
+  bySubject?: (act: string | null) => StatuteRow[];
+  model?: string;
+}) {
   const corpus = {
     hasJudgmentChunks: jest.fn().mockResolvedValue(false),
     searchStatutes: jest.fn(async (_q: string, n: string | null, act: string | null) => (n ? opts.byNumber ?? [] : opts.bySubject?.(act) ?? [])),
@@ -90,7 +97,7 @@ function build(opts: { judgments?: PrecedentRow[]; byNumber?: StatuteRow[]; bySu
   const guardrails = {
     verify: jest.fn(async (text: string, ..._rest: unknown[]) => ({ text, verifiedCitations: [], removed: [], flagged: [], triggered: false, reason: null })),
   };
-  const precedents = { authoritiesFor: jest.fn().mockResolvedValue(opts.judgments ?? []) };
+  const precedents = { authoritiesFor: jest.fn().mockResolvedValue({ judgments: opts.judgments ?? [], overruled: opts.overruled ?? [] }) };
   const rag = new RagService(corpus as never, {} as never, registry as never, guardrails as never, {} as never, {} as never, precedents as never);
   return { rag, registry, guardrails, precedents, corpus };
 }

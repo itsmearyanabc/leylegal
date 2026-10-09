@@ -53,6 +53,7 @@ export function buildLeadingJudgmentsPrompt(courtNamed: boolean): string {
   return `You help Indian advocates find case law. Name the leading judgments on the exact point of law in the question: the ones an experienced Indian advocate would cite first.
 
 - At most ${MAX_LEADING}. Fewer, or none, is better than a guess: name a judgment only if you are certain it exists and decides this point.
+- Only judgments that are good law today. If the judgment that once decided the point was later overruled, name the judgment that overruled it instead - Bhatia International gave way to BALCO (2012), Gurdwara Sahib v. Gram Panchayat Village Sirthala to Ravinder Kaur Grewal v. Manjit Kaur (2019).
 - When the question describes one particular judgment - "the judgment that recognised the right to die with dignity" - name that judgment first.
 - The case name as it is reported, petitioner first, e.g. "Arnesh Kumar v. State of Bihar".
 - The year the judgment was delivered.
@@ -80,9 +81,44 @@ Has it been overruled - wholly, or on the point in the question - by a later jud
 Reply with JSON only: {"cases": [{"name": "...", "year": 2020, "court": "Supreme Court"}]}`;
 }
 
+/**
+ * Overrulings an advocate is likely to meet, as candidates for the check
+ * above - never as facts.
+ *
+ * The model asked "what overruled P.V. Narasimha Rao (1998)?" answered with
+ * nothing, three times (live test, 9 Oct, J-GL-08): Sita Soren is of March
+ * 2024. And point-of-law answers named overruled judgments as the law - Bhatia
+ * International for Part I of the Arbitration Act, Gurudwara Sahib for adverse
+ * possession (client's audit, 9 Oct, J-PL-50, J-PL-48).
+ *
+ * An entry is only a name to look for. It is said only when the later
+ * judgment is found on Indian Kanoon by title and year and its own text says
+ * the earlier one is overruled (textOverrules) - so a wrong entry here can
+ * produce no claim, only a miss.
+ */
+export const KNOWN_OVERRULINGS: readonly { earlier: LeadingJudgment; later: LeadingJudgment; alias?: string }[] = [
+  { earlier: { name: 'P.V. Narasimha Rao v. State (CBI/SPE)', year: 1998, court: 'Supreme Court' }, later: { name: 'Sita Soren v. Union of India', year: 2024, court: 'Supreme Court' } },
+  { earlier: { name: 'Suresh Kumar Koushal v. Naz Foundation', year: 2013, court: 'Supreme Court' }, later: { name: 'Navtej Singh Johar v. Union of India', year: 2018, court: 'Supreme Court' } },
+  { earlier: { name: 'Shafhi Mohammad v. State of Himachal Pradesh', year: 2018, court: 'Supreme Court' }, later: { name: 'Arjun Panditrao Khotkar v. Kailash Kushanrao Gorantyal', year: 2020, court: 'Supreme Court' } },
+  { earlier: { name: 'Bhatia International v. Bulk Trading S.A.', year: 2002, court: 'Supreme Court' }, later: { name: 'Bharat Aluminium Co. v. Kaiser Aluminium Technical Services Inc.', year: 2012, court: 'Supreme Court' } },
+  { earlier: { name: 'Gurdwara Sahib v. Gram Panchayat Village Sirthala', year: 2013, court: 'Supreme Court' }, later: { name: 'Ravinder Kaur Grewal v. Manjit Kaur', year: 2019, court: 'Supreme Court' } },
+  // Written "ADM Jabalpur" in the judgments that discuss it.
+  { earlier: { name: 'Additional District Magistrate, Jabalpur v. Shivakant Shukla', year: 1976, court: 'Supreme Court' }, later: { name: 'K.S. Puttaswamy v. Union of India', year: 2017, court: 'Supreme Court' }, alias: 'ADM Jabalpur' },
+  { earlier: { name: 'I.C. Golak Nath v. State of Punjab', year: 1967, court: 'Supreme Court' }, later: { name: 'Kesavananda Bharati v. State of Kerala', year: 1973, court: 'Supreme Court' } },
+  { earlier: { name: 'E.V. Chinnaiah v. State of Andhra Pradesh', year: 2004, court: 'Supreme Court' }, later: { name: 'State of Punjab v. Davinder Singh', year: 2024, court: 'Supreme Court' } },
+];
+
+/** The known overrulings of a judgment, by its Kanoon title and year (KNOWN_OVERRULINGS), with the name its text may go by. */
+export function knownOverrulingsOf(title: string, year: number | null): (LeadingJudgment & { alias?: string })[] {
+  return KNOWN_OVERRULINGS.filter(({ earlier }) => {
+    const known = extractCaseName(earlier.name);
+    return known !== null && (year === null || Math.abs(year - earlier.year) <= 1) && caseNameScore(known, title) >= CASE_NAME_MATCH;
+  }).map(({ later, alias }) => (alias ? { ...later, alias } : later));
+}
+
 /** "Is Suresh Kumar Koushal v. Naz Foundation still good law?" */
 export function asksIfStillGoodLaw(text: string): boolean {
-  return /\bgood\s+law\b|\boverruled\b|\bstill\s+(?:valid|binding|holds?|applies|applicable|the\s+law)\b/i.test(text);
+  return /\bgood\s+law\b|\boverruled\b|\bstill\s+(?:valid|binding|holds?|applies|applicable|the\s+law)\b|\bcan\s+(?:i|we|one)\s+(?:still\s+)?(?:rely|cite)\b|\bsafe\s+to\s+(?:rely|cite)\b/i.test(text);
 }
 
 /**
@@ -108,7 +144,7 @@ export function textOverrules(html: string, earlierPetitionerWords: string[]): b
   // Said, not denied: "is hereby overruled", "are therefore overruled" - never
   // "has not been overruled" or "is not overruled".
   const OVERRULED =
-    /(?<!\bnot\s)(?<!\bnever\s)\b(?:is|are|was|were|stands?|be|been|hereby|therefore|accordingly|thus)\s+(?:hereby\s+|therefore\s+|accordingly\s+|expressly\s+)?overruled\b|\boverrul(?:e|es|ing)\s+(?:the\s+)?(?:said\s+)?(?:decision|judgment|view|ratio)\b|\bno\s+longer\s+good\s+law\b|\bis\s+not\s+(?:a\s+)?good\s+law\b|\bdo(?:es)?\s+not\s+lay\s+down\s+the\s+(?:correct\s+)?law\b|\bwrongly\s+decided\b/;
+    /(?<!\bnot\s)(?<!\bnever\s)\b(?:is|are|was|were|stands?|be|been|hereby|therefore|accordingly|thus)\s+(?:hereby\s+|therefore\s+|accordingly\s+|expressly\s+)?overruled\b|\boverrul(?:e|es|ing)\s+(?:the\s+)?(?:said\s+)?(?:decisions?|judgments?|views?|ratio|law)\b|\bno\s+longer\s+good\s+law\b|\bis\s+not\s+(?:a\s+)?good\s+law\b|\bdo(?:es)?\s+not\s+lay\s+down\s+the\s+(?:correct\s+)?law\b|\bwrongly\s+decided\b/;
   for (let at = text.indexOf(anchor); at !== -1; at = text.indexOf(anchor, at + anchor.length)) {
     const window = text.slice(Math.max(0, at - 600), at + 600);
     if (OVERRULED.test(window) && words.filter((w) => window.includes(w)).length >= Math.ceil(words.length / 2)) return true;

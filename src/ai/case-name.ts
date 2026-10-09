@@ -203,6 +203,10 @@ const REQUEST_WORDS = new Set([
   // a topic search, and the judgment came first in a list of ten (live test,
   // 7 and 8 Oct, B-14).
   'link', 'links', 'url', 'pdf', 'copy', 'text', 'to', 'read', 'download', 'open',
+  // "Can I rely on Ritu Chhabaria v. Union of India (2023)" was searched with
+  // "Can I rely on" in the party name, found nothing, and went to the web
+  // (client's audit, 9 Oct, J-GL-10).
+  'can', 'i', 'we', 'rely', 'cite', 'safe', 'still', 'it',
   'full', 'complete', 'summary', 'summarise', 'summarize', 'citation', 'cite', 'scc', 'air', 'holding', 'ratio',
   'judgment', 'judgement', 'decision', 'case', 'order', 'status', 'details', 'detail', 'facts', 'supreme', 'high',
   'court', 'apex', 'please', 'kindly', 'what', 'whats', 'is', 'was', 'latest', 'leading', 'landmark', 'key',
@@ -242,6 +246,10 @@ function trimRequestTail(tail: string): string {
     .replace(/[,;]?\s*(?:\(\d{4}\)|\[\d{4}\]|\d{4})\s+\d+\s+[A-Z][A-Za-z.]*\s+\d+.*$/, '')
     .replace(/[,;]?\s*AIR\s+\d{4}\s+[A-Z][A-Za-z.]*\s+\d+.*$/i, '')
     .replace(/[,;]?\s*\d{4}\s+INSC\s+\d+.*$/i, '')
+    // A year in brackets, and whatever the question goes on to: "Union of
+    // India (2023) for default bail", "State (1998) on legislators' bribery
+    // immunity". A cause title carries no bracketed year.
+    .replace(/\s*\((?:18|19|20)\d{2}\)\s.*$/, '')
     // A question after a dash: "Lalita Kumari v. Govt of UP — is FIR
     // registration mandatory?" (live test, 4 Oct, X23).
     .replace(/\s+[—–-]+\s+.*$/, '')

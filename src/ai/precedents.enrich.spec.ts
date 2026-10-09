@@ -169,9 +169,10 @@ describe('EQUIVALENT CITATIONS, from the judgment Kanoon printed them in', () =>
 
     const result = await service.search(intent() as never);
 
+    // SCC first, then AIR - the order an advocate cites in (client's audit, 9 Oct).
     expect(result.precedents[0].reporter_citations).toEqual([
-      'AIR 1973 SUPREME COURT 1461',
       '1973 4 SCC 225',
+      'AIR 1973 SUPREME COURT 1461',
     ]);
   });
 
@@ -185,9 +186,10 @@ describe('EQUIVALENT CITATIONS, from the judgment Kanoon printed them in', () =>
 
     const result = await service.search(intent() as never);
 
+    // SCC first, then AIR - the order an advocate cites in (client's audit, 9 Oct).
     expect(result.precedents[0].reporter_citations).toEqual([
-      'AIR 1973 SUPREME COURT 1461',
       '1973 4 SCC 225',
+      'AIR 1973 SUPREME COURT 1461',
     ]);
   });
 

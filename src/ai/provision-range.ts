@@ -151,3 +151,29 @@ export function nonexistentProvision(act: ActCode | null, provision: string | nu
 
 /** The last line of every "does not exist" reply - replaced by the mapping itself when there is one (rag.service.ts). */
 export const OLD_NUMBER_HINT = 'If you are working from an old IPC or CrPC number, ask for that section and its BNS or BNSS equivalent.';
+
+/** The codes in the order an answer lists them. */
+const COUNT_ORDER: ActCode[] = ['BNS', 'BNSS', 'BSA', 'IPC', 'CRPC', 'IEA'];
+
+/**
+ * "How many sections are in the BNS, BNSS and BSA?" - answered from the codes'
+ * own length, not by a model. It said "BNS 356, BNSS 533" (client's audit, 9
+ * Oct, N-15); the BNS has 358 sections, the BNSS 531, the BSA 170.
+ *
+ * The 2023 codes have no lettered sections, so their last number is their
+ * count. The old codes do (120A, 498A, 65B), so for them only the numbering
+ * is stated. Null unless the question asks how many and names a code.
+ */
+export function sectionCountReply(text: string, named: Set<ActCode>): string | null {
+  if (!/\bhow\s+many\s+(?:sections?|provisions?)\b|\b(?:kitne|kitni|kitna)\s+(?:sections?|dhara\w*)\b|कितनी\s+धारा|कितने\s+(?:सेक्शन|धारा)/i.test(text)) return null;
+  const acts = COUNT_ORDER.filter((act) => named.has(act));
+  if (acts.length === 0) return null;
+  const lines = acts.map((act) => {
+    const last = LAST_PROVISION[act]!.last;
+    const name = SHORT_NAMES[act] ?? act;
+    return act === 'BNS' || act === 'BNSS' || act === 'BSA'
+      ? `The ${name} has ${last} sections.`
+      : `The ${name}'s sections are numbered 1 to ${last}, with lettered sections (such as ${act === 'IPC' ? '120A and 498A' : act === 'CRPC' ? '41A and 436A' : '65A and 65B'}) added in between.`;
+  });
+  return lines.join(' ');
+}

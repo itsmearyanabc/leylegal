@@ -18,6 +18,7 @@ import {
   asksIfStillGoodLaw,
   buildLeadingJudgmentsPrompt,
   buildOverruledByPrompt,
+  knownOverrulingsOf,
   LeadingJudgment,
   leadingFirst,
   leadingJudgmentQueries,
@@ -119,6 +120,9 @@ function forCitation(
 function carriesCitation(row: PrecedentRow, citation: string): boolean {
   return [row.neutral_citation, ...(row.reporter_citations ?? [])].some((c) => !!c && sameCitation(c, citation));
 }
+
+/** At most this many cards for a judgment asked for by name: the judgment, and a related one or two. */
+const MAX_NAMED_RESULTS = 3;
 
 /** How many of a `cite:` search's results have their citations read before it is judged not found. */
 const CITATION_PROBE = 3;
@@ -387,6 +391,13 @@ export const JUDGMENT_SEARCH_UNAVAILABLE =
 export const JUDGMENT_SEARCH_UNAVAILABLE_HI =
   'फ़ैसलों की खोज अभी उपलब्ध नहीं है: Indian Kanoon, जहाँ Ley Legal फ़ैसले खोजता है, जवाब नहीं दे रहा, इसलिए कुछ खोजा नहीं गया। ' +
   'आपसे कोई क्रेडिट नहीं लिया गया। कुछ मिनट बाद फिर से पूछें।';
+
+/** The leading judgments on a point of law, and any of them found to be overruled (PrecedentsService.authoritiesFor). */
+export interface Authorities {
+  judgments: PrecedentRow[];
+  /** Named by the model, overruled - by the later judgment, which is in `judgments` in its place. */
+  overruled: { earlier: PrecedentRow; later: PrecedentRow }[];
+}
 
 /** How a list of judgments is ordered - said on the page by orderingNote. */
 export interface PrecedentGrouping {
@@ -706,17 +717,50 @@ export class PrecedentsService {
    * prints on it. Never throws; empty when Kanoon is not the source, or found
    * nothing.
    */
-  async authoritiesFor(intent: ClassifiedIntent): Promise<PrecedentRow[]> {
+  async authoritiesFor(intent: ClassifiedIntent): Promise<Authorities> {
+    const none: Authorities = { judgments: [], overruled: [] };
     const mode = this.source;
-    if (!(mode === 'kanoon' || (mode === 'auto' && this.kanoon.isConfigured))) return [];
+    if (!(mode === 'kanoon' || (mode === 'auto' && this.kanoon.isConfigured))) return none;
     const leading = await this.leadingJudgments(intent);
-    if (leading.length === 0) return [];
+    if (leading.length === 0) return none;
+    let headed: PrecedentRow[];
     try {
-      return await this.withHeaders(leading);
+      headed = await this.withHeaders(leading);
     } catch (err) {
       this.logger.warn({ err }, 'Could not read the leading judgments\' citations - named without them');
-      return leading;
+      headed = leading;
     }
+    return this.withoutOverruled(headed);
+  }
+
+  /**
+   * A judgment the model named that is on Ley Legal's list of overrulings,
+   * swapped for the judgment that overruled it - once that one is found on
+   * Kanoon and its text says so (KNOWN_OVERRULINGS, verifyOverruling).
+   *
+   * "Does Part I of the Arbitration Act apply to foreign-seated arbitrations?"
+   * was answered "yes" on Bhatia International, which BALCO overruled in 2012;
+   * adverse possession as a sword, on Gurudwara Sahib, which Ravinder Kaur
+   * Grewal overruled (client's audit, 9 Oct, J-PL-50, J-PL-48).
+   */
+  private async withoutOverruled(rows: PrecedentRow[]): Promise<Authorities> {
+    const judgments: PrecedentRow[] = [];
+    const overruled: Authorities['overruled'] = [];
+    for (const row of rows) {
+      const year = row.judgment_date ? new Date(row.judgment_date).getUTCFullYear() : null;
+      const known = knownOverrulingsOf(row.case_title, year);
+      const later = known.length > 0 ? await this.verifyOverruling(row, known, 'known').catch(() => null) : null;
+      if (!later) {
+        judgments.push(row);
+        continue;
+      }
+      const [headedLater] = await this.withHeaders([later]).catch(() => [later]);
+      overruled.push({ earlier: row, later: headedLater });
+      if (!judgments.some((j) => j.judgment_id === headedLater.judgment_id) && !rows.some((r) => r.judgment_id === headedLater.judgment_id)) {
+        judgments.push(headedLater);
+      }
+    }
+    return { judgments, overruled };
   }
 
   /** Whether the ingested corpus holds any judgment to search; false when that cannot be told. */
@@ -941,6 +985,15 @@ export class PrecedentsService {
   private async findOverruling(named: PrecedentRow, intent: ClassifiedIntent): Promise<PrecedentRow | null> {
     try {
       const delivered = named.judgment_date ? new Date(named.judgment_date).getUTCFullYear() : null;
+
+      // The overrulings Ley Legal knows of first (KNOWN_OVERRULINGS): no
+      // model call, and the same check on Kanoon and in the text.
+      const known = knownOverrulingsOf(named.case_title, delivered);
+      if (known.length > 0) {
+        const found = await this.verifyOverruling(named, known, 'known');
+        if (found) return found;
+      }
+
       const result = await this.registry.complete({
         task: 'synthesis',
         system: buildOverruledByPrompt(named.case_title, named.court_name, delivered),
@@ -950,37 +1003,50 @@ export class PrecedentsService {
       });
       if (result.mocked) return null;
 
-      const supreme = courtWeight(named) === 1;
       const candidates = parseLeadingJudgments(result.text, new Date().getUTCFullYear())
+        .filter((judgment) => !known.some((k) => k.name.toLowerCase() === judgment.name.toLowerCase()))
         .filter((judgment) => delivered === null || judgment.year >= delivered)
         .slice(0, 2);
-      const petitioner = (extractCaseName(named.case_title)?.petitioner ?? '')
-        .split(/\s+/)
-        .filter((word) => !/^(?:state|union|india|govt\.?|government|the|of|and|ors\.?|anr\.?|&)$/i.test(word));
-
       // What the model named, before any of it is looked for - so a miss can
       // be told apart: nothing named, not on Kanoon, or not said in its text.
       this.logger.info(
         { named: named.case_title, candidates: candidates.map((c) => `${c.name} (${c.year})`), raw: result.text.slice(0, 300) },
         'Overruling judgment candidates',
       );
-      for (const candidate of candidates) {
-        const later = await this.confirmLeadingJudgment(candidate, supreme ? 'supremecourt' : null);
-        const tid = later ? kanoonTid(later.judgment_id) : null;
-        if (!later || tid === null || later.judgment_id === named.judgment_id) {
-          this.logger.info({ named: named.case_title, candidate: `${candidate.name} (${candidate.year})` }, 'Overruling judgment not found on Kanoon');
-          continue;
-        }
-        const html = await this.kanoon.lawDocument(tid, this.env.KANOON_TIMEOUT_MS).catch(() => '');
-        const says = textOverrules(html, petitioner);
-        this.logger.info({ named: named.case_title, candidate: `${candidate.name} (${candidate.year})`, found: later.case_title, says }, 'Overruling judgment');
-        if (says) return later;
-      }
-      return null;
+      return await this.verifyOverruling(named, candidates, 'model');
     } catch (err) {
       this.logger.warn({ err }, 'Could not look for an overruling judgment - the answer stands without it');
       return null;
     }
+  }
+
+  /**
+   * The first candidate that is on Kanoon, later than the judgment, and whose
+   * own text says the judgment is overruled - or null.
+   */
+  private async verifyOverruling(
+    named: PrecedentRow,
+    candidates: (LeadingJudgment & { alias?: string })[],
+    from: 'known' | 'model',
+  ): Promise<PrecedentRow | null> {
+    const supreme = courtWeight(named) === 1;
+    const petitioner = (extractCaseName(named.case_title)?.petitioner ?? named.case_title.split(/\s+vs?\.?\s+/i)[0] ?? '')
+      .split(/\s+/)
+      .filter((word) => !/^(?:state|union|india|govt\.?|government|the|of|and|ors\.?|anr\.?|&)$/i.test(word));
+    for (const candidate of candidates) {
+      const later = await this.confirmLeadingJudgment(candidate, supreme ? 'supremecourt' : null);
+      const tid = later ? kanoonTid(later.judgment_id) : null;
+      if (!later || tid === null || later.judgment_id === named.judgment_id) {
+        this.logger.info({ named: named.case_title, candidate: `${candidate.name} (${candidate.year})`, from }, 'Overruling judgment not found on Kanoon');
+        continue;
+      }
+      const html = await this.kanoon.lawDocument(tid, this.env.KANOON_TIMEOUT_MS).catch(() => '');
+      // Or by the name the later judgment calls it - "ADM Jabalpur" (KNOWN_OVERRULINGS).
+      const says = textOverrules(html, petitioner) || (!!candidate.alias && textOverrules(html, candidate.alias.split(/\s+/)));
+      this.logger.info({ named: named.case_title, candidate: `${candidate.name} (${candidate.year})`, found: later.case_title, says, from }, 'Overruling judgment');
+      if (says) return later;
+    }
+    return null;
   }
 
   /** One named judgment, searched by title and year; null when Kanoon has no such judgment. */
@@ -1074,11 +1140,14 @@ export class PrecedentsService {
            * An unreported judgment still reads "Not available", and that is now
            * a statement about the judgment rather than about this code.
            */
+          // SCC first, then AIR - the order an advocate cites in. Kanoon's own
+          // order put "AIRONLINE 2020 SC 929" first on Vidya Drolia and left
+          // Rangappa's (2010) 11 SCC 441 unseen (client's audit, 9 Oct, D).
           reporter_citations: mergeCitations(
             citations,
             enriched[index].reporter_citations,
             header.neutralCitation,
-          ),
+          ).sort((a, b) => citationRank(a) - citationRank(b)),
           /*
            * The judgment's own words, in place of a search snippet.
            *
@@ -1293,9 +1362,31 @@ export class PrecedentsService {
     const pool = judgments.length > 0 ? judgments : matches;
     // And the parties asked for, not someone whose name contains theirs.
     const same = pool.filter((s) => samePetitioner(name, s.row.case_title));
-    const found = (same.length > 0 ? same : pool)
+    const sorted = (same.length > 0 ? same : pool)
       .sort((a, b) => courtWeight(b.row) - courtWeight(a.row) || b.score - a.score)
       .map((s) => s.row);
+    /*
+     * The Supreme Court's judgment alone, when it is there and no court was
+     * named; one card per judgment; three at most.
+     *
+     * "Joginder Kumar v. State of U.P." listed four Allahabad High Court cases
+     * of the same parties under the 1994 judgment; "Rangappa v. Sri Mohan" six
+     * Delhi District Court orders whose titles quote it; Maneka Gandhi and
+     * Danial Latifi came twice each - two Kanoon copies of one judgment
+     * (client's audit, 9 Oct, J-NL-04, J-NL-18, J-NL-13, S-SL-16).
+     */
+    const supreme = sorted.filter((row) => courtWeight(row) === 1);
+    const narrowed = !name.court && supreme.length > 0 ? supreme : sorted;
+    const seen = new Set<string>();
+    const found = narrowed
+      .filter((row) => {
+        const day = row.judgment_date ? new Date(row.judgment_date).toISOString().slice(0, 10) : row.judgment_id;
+        const key = `${(row.court_name ?? '').toLowerCase()}|${day}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, MAX_NAMED_RESULTS);
 
     this.logger.info(
       { petitioner: name.petitioner, matched: found.length, discarded: rows.length - found.length },

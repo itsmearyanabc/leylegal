@@ -2,6 +2,7 @@ import research from './__fixtures__/research-6oct.json';
 import { PrecedentRow } from '../database/types';
 import {
   asksIfStillGoodLaw,
+  knownOverrulingsOf,
   leadingFirst,
   LeadingJudgment,
   leadingJudgmentQueries,
@@ -444,12 +445,27 @@ describe('a judgment asked about as "still good law?"', () => {
     expect(result.notes?.[0]).toMatch(/^Ley Legal did not find a later judgment overruling Shafhi Mohammad vs The State Of Himachal Pradesh\. That does not confirm/);
   });
 
-  it('claims nothing when the model names no overruling judgment', async () => {
-    const { service, lawDocument } = build(JSON.stringify({ cases: [] }), `<p>${ARJUN_HEADNOTE}</p>`);
+  it('finds a known overruling when the model names none, still checked in the text (J-GL-08)', async () => {
+    // Live, 9 Oct: asked what overruled P.V. Narasimha Rao, the model answered
+    // {"cases": []} three times. Shafhi Mohammad is on the same list.
+    const { service, complete, lawDocument } = build(JSON.stringify({ cases: [] }), `<p>${ARJUN_HEADNOTE}</p>`);
 
     const result = await service.search(asked, null);
 
-    expect(lawDocument).not.toHaveBeenCalled();
+    expect(lawDocument).toHaveBeenCalledWith(3002, 15000);
+    // Found from the list: the model is not asked at all.
+    expect(complete).not.toHaveBeenCalled();
+    expect(result.precedents.map((r) => r.judgment_id)).toEqual(['kanoon:3001', 'kanoon:3002']);
+    expect(result.notes?.[0]).toMatch(/^Overruled: Shafhi Mohammad/);
+  });
+
+  it('claims nothing from the list when the later judgment\'s text does not say so', async () => {
+    const { service, complete } = build(JSON.stringify({ cases: [] }), '<p>Section 65B(4) certificate is a condition precedent.</p>');
+
+    const result = await service.search(asked, null);
+
+    // The list's candidate failed the text check, so the model is asked next - and names none.
+    expect(complete).toHaveBeenCalledTimes(1);
     expect(result.precedents).toHaveLength(1);
     expect(result.notes?.[0]).toMatch(/^Ley Legal did not find a later judgment overruling/);
   });
@@ -460,5 +476,35 @@ describe('a judgment asked about as "still good law?"', () => {
     expect(textOverrules('<p>Shafhi Mohammad is not overruled.</p>', ['Shafhi', 'Mohammad'])).toBe(false);
     // Overruled, but not that judgment.
     expect(textOverrules(`<p>${ARJUN_HEADNOTE}</p>`, ['Suresh', 'Kumar', 'Koushal'])).toBe(false);
+  });
+});
+
+describe('the overrulings Ley Legal knows of (KNOWN_OVERRULINGS)', () => {
+  it.each([
+    ['P.V. Narasimha Rao vs State(Cbi/Spe)', 1998, 'Sita Soren v. Union of India'],
+    ['Suresh Kumar Koushal & Anr vs Naz Foundation & Ors', 2013, 'Navtej Singh Johar v. Union of India'],
+    ['Bhatia International vs Bulk Trading S.A. & Anr', 2002, 'Bharat Aluminium Co. v. Kaiser Aluminium Technical Services Inc.'],
+    ['Gurdwara Sahib vs Gram Panchayat Village Sirthala & Anr', 2013, 'Ravinder Kaur Grewal v. Manjit Kaur'],
+  ])('%s (%i) -> %s', (title, year, later) => {
+    expect(knownOverrulingsOf(title, year).map((j) => j.name)).toEqual([later]);
+  });
+
+  it.each([
+    ['State Of Punjab vs Davinder Singh', 2024],
+    ['Lalita Kumari vs Govt.Of U.P.& Ors', 2013],
+    ['Kesavananda Bharati Sripadagalvaru vs State Of Kerala And Anr', 1973],
+    // The right title in the wrong year is another judgment.
+    ['P.V. Narasimha Rao vs State(Cbi/Spe)', 2005],
+  ])('names nothing for %s (%i)', (title, year) => {
+    expect(knownOverrulingsOf(title, year)).toEqual([]);
+  });
+
+  it('carries the name a later judgment uses for ADM Jabalpur', () => {
+    expect(knownOverrulingsOf('Additional District Magistrate, Jabalpur vs Shivakant Shukla', 1976)[0]).toMatchObject({ alias: 'ADM Jabalpur' });
+  });
+
+  it('reads "overrule the decisions" and "overrule the law laid down" as an overruling', () => {
+    expect(textOverrules('<p>We overrule the decisions in Gurdwara Sahib and the cases that followed it.</p>', ['Gurdwara', 'Sahib'])).toBe(true);
+    expect(textOverrules('<p>We overrule the law laid down in Bhatia International.</p>', ['Bhatia', 'International'])).toBe(true);
   });
 });
