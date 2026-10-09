@@ -13,7 +13,7 @@ import {
   stripEllipsis,
 } from '../ai/precedents.service';
 import { ProviderRegistry } from '../ai/providers/provider.registry';
-import { RagDraft, RagService, RagStage, statutesShown } from '../ai/rag.service';
+import { AI_UNAVAILABLE, AI_UNAVAILABLE_HI, RagDraft, RagService, RagStage, statutesShown } from '../ai/rag.service';
 import { CircuitOpenError } from '../common/circuit-breaker';
 import { getLogger } from '../common/logger';
 import { CREDIT_COST, CreditBalance, CreditsService } from '../credits/credits.service';
@@ -767,7 +767,21 @@ export class ChatService {
 
     const answer = await answerPromise;
     let text = answer.text.trim();
-    const mocked = answer.mocked || this.registry.isFullyMocked;
+    /*
+     * The AI provider failed for this request, and the registry answered with
+     * its placeholder (provider.registry.ts, complete). Nothing was written, so
+     * nothing is charged, and the advocate is told plainly - not shown "[Mock
+     * response - no LLM provider is configured]" for two credits, as every
+     * answer was after OpenAI calls began failing (live run, 9 Oct). A
+     * deployment configured with no provider keeps its placeholder, labelled.
+     */
+    const providerFailed = answer.mocked && !this.registry.isSynthesisMocked && !this.registry.isFullyMocked;
+    if (providerFailed) {
+      if (charged > 0) await this.credits.refund(user.id, user.role, reference, 'AI service unavailable');
+      charged = 0;
+      text = /[ऀ-ॿ]/.test(question) ? AI_UNAVAILABLE_HI : AI_UNAVAILABLE;
+    }
+    const mocked = !providerFailed && (answer.mocked || this.registry.isFullyMocked);
 
     // No official text for the provision asked about. What the web has, apart
     // and marked unverified, for one credit (web-fallback.ts); if it has
@@ -776,7 +790,9 @@ export class ChatService {
     let unverified: UnverifiedInfo | null = null;
     // A fixed reply that delivers no research - a question back, "none of the
     // sections answers this" - costs nothing and is not searched on the web.
-    if (answer.free) {
+    if (providerFailed) {
+      // Said and refunded above.
+    } else if (answer.free) {
       if (charged > 0) await this.credits.refund(user.id, user.role, reference, 'No research delivered');
       charged = 0;
       text = `${text}\n\n${/[ऀ-ॿ]/.test(question) ? 'आपसे कोई क्रेडिट नहीं लिया गया।' : costLine(0, false)}`;

@@ -13,7 +13,7 @@ import {
   PrecedentsService,
 } from '../ai/precedents.service';
 import { ProviderRegistry } from '../ai/providers/provider.registry';
-import { RagService } from '../ai/rag.service';
+import { AI_UNAVAILABLE, AI_UNAVAILABLE_HI, RagService } from '../ai/rag.service';
 import { TranscriptionService } from '../ai/transcription.service';
 import { getLogger, maskPhone } from '../common/logger';
 import { AnalyticsRepository } from '../database/repositories/analytics.repository';
@@ -1441,6 +1441,16 @@ export class ConversationService {
     ]);
 
     const answer = await this.rag.answer(intent, history);
+
+    // The AI provider failed for this request and the registry answered with
+    // its placeholder: refunded, and said plainly (as on the website).
+    if (answer.mocked && !this.registry.isSynthesisMocked && !this.registry.isFullyMocked) {
+      await this.credits
+        .refund(user.id, user.role, spendReference(job.waMessageId), 'AI service unavailable')
+        .catch((err) => this.logger.warn({ err }, 'Could not refund an answer the AI service did not write'));
+      await this.api.sendText(job.from, /[ऀ-ॿ]/.test(originalText) ? AI_UNAVAILABLE_HI : AI_UNAVAILABLE);
+      return;
+    }
 
     // No official text for the provision asked about. What the web has, apart
     // and marked unverified, for one credit (web-fallback.ts); if nothing, the

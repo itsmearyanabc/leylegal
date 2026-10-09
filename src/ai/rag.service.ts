@@ -936,6 +936,15 @@ const LANGUAGE_AGAIN: Record<string, string> = {
   hi: 'YOUR LAST ANSWER WAS NOT IN HINDI. Write the whole answer in Hindi (Devanagari script). Keep section numbers, case names and Act names in English, exactly as given.',
 };
 
+/** The reply when the AI provider failed for a request and nothing was written (web/chat.service.ts). */
+export const AI_UNAVAILABLE =
+  'The AI service Ley Legal uses to write answers is not responding right now, so no answer was written. ' +
+  'You have not been charged. Please ask again in a few minutes - judgment search and case status still work.';
+
+export const AI_UNAVAILABLE_HI =
+  'Ley Legal जिस AI सेवा से उत्तर लिखता है, वह अभी जवाब नहीं दे रही, इसलिए कोई उत्तर नहीं लिखा गया। ' +
+  'आपसे कोई क्रेडिट नहीं लिया गया। कुछ मिनट बाद फिर से पूछें - फ़ैसलों की खोज और केस स्टेटस अभी भी काम कर रहे हैं।';
+
 /** Words that put a question in criminal law or procedure, where the BNS, BNSS and BSA answer it. */
 const CRIMINAL_TOPIC =
   /\b(?:police|arrest(?:ed)?|bail|fir|charge-?\s?sheet|investigation|accused|offen[cs]es?|punishable|remand|custody|cognizable|magistrate|confession|undertrial|prosecution|warrant|rape|murder|dowry|kidnapping|theft|snatching|lynching)\b/i;

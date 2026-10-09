@@ -814,3 +814,22 @@ describe('the 9 October audit, on the web side', () => {
     expect(answers(events)).toMatch(/^To delete your Ley Legal account and its history, follow section 7 of the Privacy notice/);
   });
 });
+
+describe('an answer the AI provider failed to write (live run, 9 Oct)', () => {
+  it('is refunded and said plainly, not shown as "[Mock response ...]" for two credits', async () => {
+    const { service, credits, rag } = build({ intent: 'GENERAL_LEGAL' });
+    rag.answer.mockResolvedValueOnce({
+      text: '_[Mock response - no LLM provider is configured]_ You asked: "Which case is reported at (2014) 2 SCC 1?"',
+      citations: [], passages: [], statutes: [], model: 'mock', inputTokens: 0, outputTokens: 0, latencyMs: 1,
+      guardrailTriggered: false, guardrailReason: null, mocked: true,
+    });
+
+    const events = await ask(service, 'Is instant triple talaq valid?');
+
+    expect(credits.refund).toHaveBeenCalledWith('user-1', 'GUEST_LAWYER', expect.any(String), 'AI service unavailable');
+    expect(answers(events)).toMatch(/^The AI service Ley Legal uses to write answers is not responding right now/);
+    const answer = events.find((e): e is Extract<ChatEvent, { type: 'answer' }> => e.type === 'answer');
+    expect(answer?.charged).toBe(0);
+    expect((answer?.message.structured as { mocked?: boolean }).mocked).toBe(false);
+  });
+});
